@@ -71,8 +71,8 @@ def _call_gemini(api_key: str, model_id: str, bullets: str, reviews: str):
 
 def main():
     _inject_css()
-    st.title("Amazon Rufus対策 商品紹介文ジェネレーター (Gemini無料版)")
-    st.caption("最新のGemini 1.5 Flashモデルを使用して無料でリライトします。")
+    st.title("Amazon Rufus/楽天AI対策 商品紹介文ジェネレーター ")
+    st.caption("最新のGemini 1.5 Flashモデルを使用してリライトします。")
 
     with st.sidebar:
         st.header("設定")
