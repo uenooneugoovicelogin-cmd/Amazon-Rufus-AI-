@@ -56,9 +56,13 @@ def get_genre_instruction(genre):
     }
     return instructions.get(genre, "商品の利便性と品質を客観的に説明してください。")
 
-def _call_gemini(api_key: str, model_id: str, prompt_text: str):
+def _call_gemini(api_key: str, prompt_text: str):
+    # APIの初期化
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name=f"models/{model_id}")
+    
+    # モデル名を最も確実な 'gemini-1.5-flash' に直接指定して404エラーを回避
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    
     response = model.generate_content(prompt_text)
     try:
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
@@ -68,16 +72,17 @@ def _call_gemini(api_key: str, model_id: str, prompt_text: str):
 
 def main():
     _inject_css()
+    # タイトルを表示
     st.title("📦 モール別 AI特化型 商品紹介文ジェネレーター")
     
     with st.sidebar:
         st.header("🔑 認証・設定")
         api_key = st.text_input("Gemini API Key", type="password")
-        model_id = st.selectbox("使用モデル", ["gemini-1.5-flash", "gemini-2.0-flash"])
+        # モデル選択を固定（エラー回避のため）
+        st.info("使用モデル: gemini-1.5-flash (安定版)")
         
         st.divider()
         st.header("🎨 カテゴリ・トーン設定")
-        # ご指定のジャンルリスト
         genre_list = [
             "スポーツ", "アウトドア", "大人コスチューム", "子供コスチューム", "ベビー", "ペット", 
             "園芸", "手芸・ハンドメイド", "介護", "ハロウィン雑貨", "クリスマス雑貨", "推し活", 
@@ -86,7 +91,6 @@ def main():
         genre = st.selectbox("商品ジャンル", genre_list)
         tone = st.radio("文章のトーン", ["誠実・信頼（推奨）", "情熱的・賑やか", "簡潔・ロジカル"])
         
-        # ジャンルごとの個別指示を内部で取得
         genre_advice = get_genre_instruction(genre)
 
     tab_amz, tab_rak = st.tabs(["Amazon Rufus対策", "楽天 AI/SEO対策"])
@@ -95,7 +99,7 @@ def main():
     # Amazon タブ
     # ==========================================
     with tab_amz:
-        st.markdown(f'<div class="status-box">Amazon Rufus対策：ジャンル「{genre}」に最適化し、客観的な事実とQ&Aに対応した文章を生成します。</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="status-box">Amazon Rufus対策：ジャンル「{genre}」に最適化します。</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -110,19 +114,14 @@ def main():
                     with st.spinner("生成中..."):
                         prompt = f"""あなたはAmazon専門コピーライターです。
 ジャンル：{genre}（{genre_advice}）、トーン：{tone} で作成してください。
-
 【重要ルール】
 ・不当表示を避け、信頼性を最優先。
-・箇条書きは冒頭の【】にメリットを書き、続く文章で事実（根拠）を述べる。
-・Rufusが比較回答しやすいよう「具体的な数値」や「用途」を盛り込む。
-
+・箇条書きは冒頭の【】にメリットを書き、続く文章で事実を述べる。
+・具体的な数値や用途を盛り込む。
 【データ】
-現状：{amz_curr}
-補足：{amz_supp}
-レビュー：{amz_rev}
-
-JSON：{{"result_1": "修正後の箇条書き5点", "result_2": "紹介文"}}"""
-                        st.session_state.amz_out = _call_gemini(api_key, model_id, prompt)
+現状：{amz_curr} | 補足：{amz_supp} | レビュー：{amz_rev}
+JSON形式で出力：{{"result_1": "修正後の箇条書き5点", "result_2": "紹介文"}}"""
+                        st.session_state.amz_out = _call_gemini(api_key, prompt)
 
         with col2:
             if "amz_out" in st.session_state:
@@ -135,7 +134,7 @@ JSON：{{"result_1": "修正後の箇条書き5点", "result_2": "紹介文"}}""
     # 楽天 タブ
     # ==========================================
     with tab_rak:
-        st.markdown(f'<div class="status-box">楽天SEO対策：ジャンル「{genre}」に最適化し、キーワード網羅と感情的な訴求を両立させます。</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="status-box">楽天SEO対策：ジャンル「{genre}」に最適化します。</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -150,19 +149,14 @@ JSON：{{"result_1": "修正後の箇条書き5点", "result_2": "紹介文"}}""
                     with st.spinner("生成中..."):
                         prompt = f"""あなたは楽天ECコンサルタントです。
 ジャンル：{genre}（{genre_advice}）、トーン：{tone} で作成してください。
-
 【重要ルール】
-・「スマホユーザー」がスクロールしながら読んでも頭に入るリズム。
-・指定キーワードを自然に、かつ強力に盛り込む。
-・その商品を買った後の「生活の変化」を魅力的に描写する。
-
+・スマホユーザー向けの読みやすいリズム。
+・指定キーワードを自然に盛り込む。
+・生活の変化を魅力的に描写。
 【データ】
-現状：{rak_curr}
-キーワード：{rak_kw}
-体験：{rak_ben}
-
-JSON：{{"result_1": "キャッチコピー案", "result_2": "紹介文"}}"""
-                        st.session_state.rak_out = _call_gemini(api_key, model_id, prompt)
+現状：{rak_curr} | キーワード：{rak_kw} | 体験：{rak_ben}
+JSON形式で出力：{{"result_1": "キャッチコピー案", "result_2": "紹介文"}}"""
+                        st.session_state.rak_out = _call_gemini(api_key, prompt)
 
         with col2:
             if "rak_out" in st.session_state:
