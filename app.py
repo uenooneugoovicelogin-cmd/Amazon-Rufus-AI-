@@ -55,28 +55,38 @@ def main():
     with tab_amazon:
         col_amz_in, col_amz_out = st.columns(2)
         with col_amz_in:
-            st.subheader("Amazon入力データ")
-            amz_specs = st.text_area("1. 商品の特徴・スペック", placeholder="例：300gと軽量、防水IPX7...", height=100, key="amz_specs")
-            amz_qa = st.text_area("2. 想定される質問への回答", placeholder="例：Q.食洗機は使えますか？ A.はい...", height=100, key="amz_qa")
-            amz_reviews = st.text_area("3. カスタマーレビュー（重要）", placeholder="実際のレビューを貼り付けるとRufus対策の精度が上がります", height=150, key="amz_reviews")
+            st.subheader("Amazon現在のデータ & 補足情報")
+            amz_current = st.text_area("1. 現在の商品説明・箇条書き", placeholder="現在使用中の文章をここに貼り付けてください", height=150, key="amz_current")
+            amz_qa = st.text_area("2. Q&A・スペック情報", placeholder="Rufusが回答に使いそうな事実情報を入力（例：防水性能、サイズ感など）", height=100, key="amz_qa")
+            amz_reviews = st.text_area("3. カスタマーレビュー", placeholder="実際のレビューを貼り付けると、不満の解消や利点の強調が強化されます", height=100, key="amz_reviews")
             
             if st.button("Amazon用を生成", key="btn_amz"):
-                if not api_key or not amz_specs:
-                    st.error("APIキーと特徴を入力してください。")
+                if not api_key or not amz_current:
+                    st.error("APIキーと現在の文章を入力してください。")
                 else:
-                    with st.spinner("生成中..."):
-                        amz_prompt = f"""あなたはAmazon専門コピーライターです。Rufus（会話型AI）向けに、以下の情報を元に客観的で信頼性の高い文章を作ってください。
-【特徴】{amz_specs}
-【Q&A】{amz_qa}
-【レビュー】{amz_reviews}
-JSON形式で出力：{{"result_1": "修正後の箇条書き5点", "result_2": "Rufusが引用しやすい紹介文"}}"""
+                    with st.spinner("Amazon Rufus向けにリライト中..."):
+                        amz_prompt = f"""あなたはAmazon専門のコピーライターです。
+現在の文章をベースに、Amazonの会話型AI（Rufus）が「顧客の疑問に答えやすく」かつ「比較検討で選ばれやすい」内容にリライトしてください。
+
+【現在の文章】
+{amz_current}
+【補足スペック・Q&A】
+{amz_qa}
+【カスタマーレビュー】
+{amz_reviews}
+
+出力は必ず以下のJSON形式にしてください。：
+{{
+  "result_1": "修正後の箇条書き（5点）",
+  "result_2": "Rufus対策済みの商品紹介文"
+}}"""
                         st.session_state.amz_res = _call_gemini(api_key, model_id, amz_prompt)
 
         with col_amz_out:
             st.subheader("Amazon生成結果")
             if "amz_res" in st.session_state:
                 st.text_area("最適化された箇条書き", value=st.session_state.amz_res.get("result_1", ""), height=200)
-                st.text_area("最適化された紹介文", value=st.session_state.amz_res.get("result_2", ""), height=250)
+                st.text_area("最適化された紹介文", value=st.session_state.amz_res.get("result_2", ""), height=300)
 
     # ==========================================
     # 楽天 タブ
@@ -84,28 +94,38 @@ JSON形式で出力：{{"result_1": "修正後の箇条書き5点", "result_2": 
     with tab_rakuten:
         col_rak_in, col_rak_out = st.columns(2)
         with col_rak_in:
-            st.subheader("楽天入力データ")
-            rak_benefits = st.text_area("1. 商品のベネフィット", placeholder="例：毎朝の準備が5分短縮！", height=100, key="rak_benefits")
-            rak_keywords = st.text_area("2. 盛り込みたいキーワード", placeholder="例：送料無料, 母の日...", height=100, key="rak_keywords")
-            rak_ref = st.text_area("3. 参考情報・レビュー", placeholder="楽天での悩み事や過去のレビューなど", height=150, key="rak_ref")
+            st.subheader("楽天現在のデータ & 補足情報")
+            rak_current = st.text_area("1. 現在の商品説明文", placeholder="現在使用中の文章をここに貼り付けてください", height=150, key="rak_current")
+            rak_keywords = st.text_area("2. 盛り込みたいキーワード", placeholder="送料無料、あす楽、母の日、ランキング受賞など", height=100, key="rak_keywords")
+            rak_benefits = st.text_area("3. ベネフィット・レビュー情報", placeholder="ユーザーが手にする感動体験や、過去の好評なレビュー内容など", height=100, key="rak_benefits")
             
             if st.button("楽天用を生成", key="btn_rak"):
-                if not api_key or not rak_benefits:
-                    st.error("APIキーとベネフィットを入力してください。")
+                if not api_key or not rak_current:
+                    st.error("APIキーと現在の文章を入力してください。")
                 else:
-                    with st.spinner("生成中..."):
-                        rak_prompt = f"""あなたは楽天ECコンサルタントです。AIと検索SEO、顧客心理を意識した熱量の高い文章を作ってください。
-【ベネフィット】{rak_benefits}
-【キーワード】{rak_keywords}
-【参考】{rak_ref}
-JSON形式で出力：{{"result_1": "魅力的なキャッチコピー案", "result_2": "キーワードを網羅した紹介文"}}"""
+                    with st.spinner("楽天AI・SEO向けにリライト中..."):
+                        rak_prompt = f"""あなたは楽天ECコンサルタントです。
+現在の文章をベースに、楽天の検索AIに評価されやすく、かつユーザーの購買意欲を煽る熱量の高い文章にリライトしてください。
+
+【現在の文章】
+{rak_current}
+【キーワード】
+{rak_keywords}
+【ベネフィット・参考情報】
+{rak_benefits}
+
+出力は必ず以下のJSON形式にしてください。：
+{{
+  "result_1": "魅力的なキャッチコピー案（3点）",
+  "result_2": "キーワードを網羅し、ベネフィットを強調した紹介文"
+}}"""
                         st.session_state.rak_res = _call_gemini(api_key, model_id, rak_prompt)
 
         with col_rak_out:
             st.subheader("楽天生成結果")
             if "rak_res" in st.session_state:
                 st.text_area("キャッチコピー案", value=st.session_state.rak_res.get("result_1", ""), height=200)
-                st.text_area("最適化された紹介文", value=st.session_state.rak_res.get("result_2", ""), height=250)
+                st.text_area("最適化された紹介文", value=st.session_state.rak_res.get("result_2", ""), height=300)
 
 if __name__ == "__main__":
     main()
