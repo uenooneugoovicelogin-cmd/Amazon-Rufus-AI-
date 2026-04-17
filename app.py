@@ -57,16 +57,22 @@ def main():
         
         st.divider()
         st.header("🎨 出力設定")
-        # 実務に合わせたジャンル展開
+        # ユーザー様の取り扱いジャンルを網羅
         genre = st.selectbox("商品ジャンル", 
                              ["一般雑貨", 
-                              "イベント・パーティグッズ（ハロウィン・クリスマス等）", 
-                              "介護・看護用品", 
-                              "ベビー・ペット用品", 
-                              "園芸・DIY・スポーツ"])
+                              "季節行事（ハロウィン・クリスマス等）", 
+                              "推し活グッズ・ホビー",
+                              "介護・看護・ヘルスケア", 
+                              "ベビー・マタニティ", 
+                              "ペット用品",
+                              "スポーツ・アウトドア",
+                              "園芸・ガーデニング・DIY",
+                              "キッチン・日用品",
+                              "その他（カスタム指示へ）"])
+        
         tone = st.radio("文章のトーン", ["誠実・信頼（推奨）", "情熱的・ベネフィット重視", "簡潔・ロジカル"])
         
-        st.info("※生成された文章は必ず人間が最終確認し、PSC法などの安全基準や、キャラクター知財等の権利侵害がないかチェックしてください。")
+        st.info("※生成された文章は必ず人間が最終確認し、法律（PSC法・薬機法）や知財権（キャラクター著作権等）に抵触しないかチェックしてください。")
 
     tab_amz, tab_rak = st.tabs(["🛒 Amazon Rufus対策", "🔴 楽天 AI/SEO対策"])
 
@@ -74,26 +80,26 @@ def main():
     # Amazon タブ
     # ==========================================
     with tab_amz:
-        st.markdown('<div class="status-box">Amazon仕様：5つの箇条書きスロットと、スマホで読みやすい文字数制限（約600〜800文字）を適用します。</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-box">Amazon仕様：5つの箇条書きスロットと、スマホで読みやすい文字数調整を適用します。</div>', unsafe_allow_html=True)
         col1, col2 = st.columns([1, 1.2])
         
         with col1:
-            amz_curr = st.text_area("1. 現在の文章（箇条書き・説明文）", height=150)
-            amz_supp = st.text_area("2. 補足スペック・Q&A情報", placeholder="素材、寸法、よくある質問（食洗機可否など）", height=100)
-            amz_rev = st.text_area("3. カスタマーレビュー", placeholder="実際のレビューを入れるとRufus対策の精度が上がります", height=100)
+            amz_curr = st.text_area("1. 現在の文章（箇条書き・説明文）", height=150, key="amz_c_input")
+            amz_supp = st.text_area("2. 補足スペック・Q&A情報", placeholder="素材、寸法、よくある質問など", height=100, key="amz_s_input")
+            amz_rev = st.text_area("3. カスタマーレビュー", placeholder="実際のレビュー内容", height=100, key="amz_r_input")
             
             if st.button("Amazon用リライト実行", key="btn_amz"):
                 if not api_key or not amz_curr:
                     st.error("APIキーと現在の文章は必須です。")
                 else:
-                    with st.spinner("Amazon仕様（5項目分割・文字数調整）で生成中..."):
+                    with st.spinner("Amazon仕様で生成中..."):
                         prompt = f"""あなたはAmazonのシニアコピーライターです。
 ジャンル：{genre}、トーン：{tone} でリライトしてください。
 
 【重要ルール】
-1. 箇条書きは必ず「5つ」作成し、1つあたり100文字以内、冒頭に【】で見出しをつけること。
-2. 商品紹介文は全体で600〜800文字以内。見出しや空白（改行）を使い、スマホで拾い読みしやすい構造にすること。
-3. 誇大表現、安全基準（PSC等）に関する虚偽表現、他社ブランド名（キャラクター名等）の無断使用は厳禁。
+1. 箇条書きは必ず「5つ」作成。1項目100文字以内、冒頭に【要約見出し】をつけること。
+2. 商品紹介文は全体で600〜800文字以内。見出しや空白（改行）を使い、読みやすく構造化すること。
+3. 法律・規約遵守。虚偽記載、他社ブランド名の無断引用は厳禁。
 
 【現在のデータ】
 {amz_curr}
@@ -104,12 +110,12 @@ def main():
 
 JSON形式で出力：
 {{
-  "bullet_1": "1つ目の箇条書き",
-  "bullet_2": "2つ目の箇条書き",
-  "bullet_3": "3つ目の箇条書き",
-  "bullet_4": "4つ目の箇条書き",
-  "bullet_5": "5つ目の箇条書き",
-  "description": "Rufusが引用しやすく、ユーザーが読みやすい構造化された紹介文"
+  "bullet_1": "箇条書き1",
+  "bullet_2": "箇条書き2",
+  "bullet_3": "箇条書き3",
+  "bullet_4": "箇条書き4",
+  "bullet_5": "箇条書き5",
+  "description": "構造化された紹介文"
 }}"""
                         st.session_state.amz_out = _call_gemini(api_key, model_id, prompt)
 
@@ -117,10 +123,9 @@ JSON形式で出力：
             if "amz_out" in st.session_state:
                 res = st.session_state.amz_out
                 if "error" in res:
-                    st.error("生成に失敗しました。もう一度お試しください。")
+                    st.error("生成エラーが発生しました。")
                 else:
-                    st.subheader("📋 箇条書き（セラーセントラル用5枠）")
-                    st.caption("※各テキストボックスの中身をコピペして使えます")
+                    st.subheader("📋 箇条書き（5枠個別）")
                     st.text_input("箇条書き 1", value=res.get("bullet_1", ""))
                     st.text_input("箇条書き 2", value=res.get("bullet_2", ""))
                     st.text_input("箇条書き 3", value=res.get("bullet_3", ""))
@@ -129,52 +134,47 @@ JSON形式で出力：
                     
                     st.subheader("📝 商品紹介文")
                     desc_text = res.get("description", "")
-                    st.text_area("スマホ最適化済み紹介文", value=desc_text, height=250)
+                    st.text_area("最適化済み紹介文", value=desc_text, height=250)
                     
-                    # 文字数カウンターと警告
+                    # 文字数カウンター
                     desc_len = len(desc_text)
                     if desc_len > 1000:
-                        st.error(f"⚠️ 現在の文字数：{desc_len}文字（長すぎます。手動で削るか再生成してください）")
+                        st.error(f"⚠️ 文字数：{desc_len}文字（長すぎます）")
                     else:
-                        st.success(f"✅ 現在の文字数：{desc_len}文字（適正な長さです）")
+                        st.success(f"✅ 文字数：{desc_len}文字（適正）")
 
     # ==========================================
     # 楽天 タブ
     # ==========================================
     with tab_rak:
-        st.markdown('<div class="status-box rakuten-box">楽天仕様：キーワードを網羅し、RMSにそのまま貼れるHTMLタグ付き文章も生成します。</div>', unsafe_allow_html=True)
+        st.markdown('<div class="status-box rakuten-box">楽天仕様：キーワードを網羅し、RMS直貼り用のHTMLタグ付き文章も生成します。</div>', unsafe_allow_html=True)
         col1, col2 = st.columns([1, 1.2])
         
         with col1:
-            rak_curr = st.text_area("1. 現在の商品説明文", height=150, key="rak_c")
-            rak_kw = st.text_area("2. 盛り込みたいキーワード", placeholder="送料無料、あす楽、母の日、お買い物マラソンなど", height=100)
-            rak_ben = st.text_area("3. ベネフィット・感動体験", placeholder="この商品で生活がどう変わるか", height=100)
+            rak_curr = st.text_area("1. 現在の商品説明文", height=150, key="rak_c_input")
+            rak_kw = st.text_area("2. 盛り込みたいキーワード", placeholder="送料無料、あす楽など", height=100, key="rak_k_input")
+            rak_ben = st.text_area("3. ベネフィット・レビュー", placeholder="使用感やメリット", height=100, key="rak_b_input")
             
             if st.button("楽天用リライト実行", key="btn_rak"):
                 if not api_key or not rak_curr:
                     st.error("APIキーと現在の文章は必須です。")
                 else:
-                    with st.spinner("楽天SEO最適化＆HTML生成中..."):
+                    with st.spinner("楽天SEO最適化中..."):
                         prompt = f"""あなたは楽天のトップECコンサルタントです。
 ジャンル：{genre}、トーン：{tone} でリライトしてください。
 
 【重要ルール】
-1. 指定キーワードを不自然にならないよう網羅すること。
-2. 商品説明文は800〜1000文字程度で、読者の感情を動かす構成にすること。
-3. 通常のテキスト版に加え、RMS（楽天管理画面）用に、重要なキーワードや見出しを <b> や <br> タグで装飾したHTML版も作成すること。
+1. 指定キーワードを自然に網羅。
+2. 商品説明文は800〜1000文字程度。
+3. プレーンテキスト版と、RMS用に <b> や <br> タグを適度に使用したHTML版を作成すること。
 
-【現在のデータ】
-{rak_curr}
-【キーワード】
-{rak_kw}
-【ベネフィット】
-{rak_ben}
+【データ】{rak_curr} / 【KW】{rak_kw} / 【ベネフィット】{rak_ben}
 
 JSON形式で出力：
 {{
-  "catchcopy": "検索結果で目立つ、魅力的なキャッチコピー（1案、最大60文字）",
-  "desc_text": "プレーンテキスト版の紹介文",
-  "desc_html": "<b>や<br>タグを含めた、RMSにそのまま貼れるHTML版の紹介文"
+  "catchcopy": "魅力的なキャッチコピー",
+  "desc_text": "テキスト版",
+  "desc_html": "HTMLタグ付き版"
 }}"""
                         st.session_state.rak_out = _call_gemini(api_key, model_id, prompt)
 
@@ -182,16 +182,13 @@ JSON形式で出力：
             if "rak_out" in st.session_state:
                 res = st.session_state.rak_out
                 if "error" in res:
-                    st.error("生成に失敗しました。もう一度お試しください。")
+                    st.error("エラー")
                 else:
                     st.subheader("🎯 キャッチコピー")
-                    st.text_input("商品名やPCキャッチコピー欄へ", value=res.get("catchcopy", ""))
-                    
-                    st.subheader("📝 商品説明文（プレーンテキスト）")
-                    st.text_area("スマホ用などの通常テキスト", value=res.get("desc_text", ""), height=200)
-                    
-                    st.subheader("💻 楽天RMS用（HTMLタグ付き）")
-                    st.caption("※これをコピーしてPC用商品説明文に貼ると、自動で太字や改行が反映されます")
+                    st.text_input("コピー", value=res.get("catchcopy", ""))
+                    st.subheader("📝 テキスト版")
+                    st.text_area("通常テキスト", value=res.get("desc_text", ""), height=200)
+                    st.subheader("💻 楽天RMS用（HTMLコード）")
                     st.code(res.get("desc_html", ""), language="html")
 
 if __name__ == "__main__":
