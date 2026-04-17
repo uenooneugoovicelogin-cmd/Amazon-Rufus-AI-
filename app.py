@@ -3,7 +3,7 @@ import google.generativeai as genai
 import json
 
 # --- ページ設定 ---
-st.set_page_config(page_title="Rufus ＆ 楽天AI モール別AI対策ツール", layout="wide")
+st.set_page_config(page_title="Rufus ＆ 楽天AI モール別対策ツール", layout="wide")
 
 def _inject_custom_style():
     st.markdown("""
@@ -18,13 +18,17 @@ def _inject_custom_style():
         background-color: #0f172a !important; /* 濃紺 */
       }
       
-      /* ラベル、見出し、ラジオボタンのテキストを白に統一 */
-      [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+      /* 見出し、メインラベルを白に統一 */
       [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
       [data-testid="stSidebar"] .stMarkdown p,
-      [data-testid="stSidebar"] label {
+      [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
         color: #ffffff !important;
         font-weight: 600 !important;
+      }
+
+      /* ★修正ポイント：ラジオボタンの選択肢テキストを強制的に真っ白にする★ */
+      [data-testid="stSidebar"] div[role="radiogroup"] label div {
+        color: #ffffff !important;
       }
 
       /* 入力ボックス（セレクトボックス・テキスト入力）をダーク仕様に変更 */
@@ -35,9 +39,14 @@ def _inject_custom_style():
         border: 1px solid #334155 !important;
       }
       
-      /* セレクトボックスのプルダウンメニュー内の文字 */
+      /* セレクトボックスで選択されている文字自体も白に */
+      [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span {
+        color: #ffffff !important;
+      }
+      
+      /* ただし、セレクトボックスの「プルダウンメニュー内」のリストは白背景＋黒文字で見やすく */
       div[data-baseweb="popover"] * {
-        color: #0f172a !important; /* 選択肢リストは白背景に黒文字で見やすく */
+        color: #0f172a !important; 
       }
 
       /* --- メインエリアのカード型デザイン --- */
@@ -146,7 +155,7 @@ def main():
                 if not api_key: st.error("APIキーを入力してください")
                 else:
                     with st.spinner("AIが箇条書きを生成中..."):
-                        p = f"Amazon用。箇条書き(bullet_1〜5:各95字程度), 詳細説明(description)をJSONで。ジャンル:{genre}。データ:{amz_c}/{amz_s}/{amz_r}"
+                        p = f"Amazon用。箇条書き(bullet_1〜5:各95字程度), 詳細説明(description)をJSONで。ジャンル:{genre}。トーン:{tone}。データ:{amz_c}/{amz_s}/{amz_r}"
                         st.session_state.amz_res = _call_gemini(api_key, model_name, p)
 
         with col2:
@@ -186,7 +195,7 @@ def main():
                 if not api_key: st.error("APIキーを入力してください")
                 else:
                     with st.spinner("楽天SEOに最適化中..."):
-                        p = f"楽天用(catchcopy, desc_text, desc_html)。JSONで。レビュー反映重視。KW:{rak_k}。データ:{rak_c}/{rak_r}"
+                        p = f"楽天用(catchcopy, desc_text, desc_html)。JSONで。レビュー反映重視。KW:{rak_k}。トーン:{tone}。データ:{rak_c}/{rak_r}"
                         st.session_state.rak_res = _call_gemini(api_key, model_name, p)
         
         with col2:
