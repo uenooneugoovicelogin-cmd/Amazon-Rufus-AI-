@@ -8,34 +8,38 @@ st.set_page_config(page_title="Rufus ＆ 楽天AI モール別対策ツール", 
 def _inject_custom_style():
     st.markdown("""
     <style>
-      /* 全体背景と基本フォント */
+      /* 全体背景 */
       html, body, [data-testid="stAppViewContainer"] {
         background-color: #f1f5f9;
         color: #1e293b;
       }
       
-      /* 左側メニュー（サイドバー）の視認性向上 */
+      /* --- サイドバー（メニュー）の徹底した視認性向上 --- */
       [data-testid="stSidebar"] {
         background-color: #0f172a !important; /* 深いネイビー */
         border-right: 1px solid #e2e8f0;
       }
-      /* サイドバー内のテキストとラベルを白に固定 */
-      [data-testid="stSidebar"] .stMarkdown p, 
-      [data-testid="stSidebar"] label, 
-      [data-testid="stSidebar"] h1, 
-      [data-testid="stSidebar"] h2 {
+      
+      /* サイドバー内の全テキスト（見出し、ラベル、ラジオボタンの選択肢、説明文など）を白に */
+      [data-testid="stSidebar"] * {
         color: #ffffff !important;
-        font-weight: 600 !important;
       }
-      /* サイドバー内の入力ボックス調整 */
+      
+      /* 入力エリアの中の文字だけは入力しやすいように黒にする */
+      [data-testid="stSidebar"] input, 
+      [data-testid="stSidebar"] select,
+      [data-testid="stSidebar"] div[role="listbox"] div {
+        color: #1e293b !important;
+      }
+      
+      /* サイドバー内の入力ボックス背景 */
       [data-testid="stSidebar"] .stTextInput input, 
       [data-testid="stSidebar"] .stSelectbox div {
-        background-color: #1e293b !important;
-        color: white !important;
-        border: 1px solid #334155 !important;
+        background-color: #f8fafc !important;
+        border: 1px solid #cbd5e1 !important;
       }
 
-      /* メインエリアのカードデザイン */
+      /* --- メインエリアのカードデザイン --- */
       div[data-testid="stVerticalBlock"] > div.stColumn {
         background: #ffffff;
         padding: 25px !important;
@@ -48,12 +52,11 @@ def _inject_custom_style():
       h1 { color: #0f172a; font-weight: 800 !important; border-bottom: 3px solid #3b82f6; padding-bottom: 10px; }
       h2, h3 { color: #334155; }
       
-      /* 実行ボタン（Amazonオレンジ/プロブルーのグラデーション） */
+      /* 実行ボタン（鮮やかなブルー） */
       div.stButton > button:first-child {
         background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%) !important;
         color: white !important;
         border: none !important;
-        padding: 10px 20px !important;
         border-radius: 8px !important;
         font-weight: bold !important;
         width: 100% !important;
@@ -61,7 +64,7 @@ def _inject_custom_style():
         box-shadow: 0 4px 6px -1px rgba(37, 99, 235, 0.2);
       }
       
-      /* コピーボタン（控えめなグレー） */
+      /* コピーボタン（清潔感のあるグレー） */
       .copy-area button {
         background-color: #f8fafc !important;
         color: #64748b !important;
@@ -133,7 +136,7 @@ def main():
                 model_name = st.selectbox("使用モデル（予備）", ["gemini-1.5-flash", "gemini-1.5-pro"])
         
         st.divider()
-        st.header("📝 リライト設定")
+        st.header("🎨 リライト設定")
         genre = st.selectbox("商品ジャンル", ["一般雑貨", "季節行事", "推し活・ホビー", "介護・看護", "ベビー", "ペット", "スポーツ", "園芸", "その他"])
         tone = st.radio("文章のトーン", ["誠実・信頼（推奨）", "情熱的・売込重視", "簡潔・スペック重視"])
 
@@ -144,9 +147,9 @@ def main():
         col1, col2 = st.columns([1, 1.2], gap="large")
         with col1:
             st.subheader("📥 入力エリア")
-            amz_c = st.text_area("1. 現在の商品説明", height=150, placeholder="既存の箇条書きや説明文を入力")
-            amz_s = st.text_area("2. スペック・補足情報", height=100, placeholder="素材、サイズ、1688等の情報")
-            amz_r = st.text_area("3. カスタマーレビュー", height=100, placeholder="実際の声を反映してRufus対策を強化")
+            amz_c = st.text_area("1. 現在の商品説明", height=150)
+            amz_s = st.text_area("2. スペック・補足情報", height=100)
+            amz_r = st.text_area("3. カスタマーレビュー", height=100)
             if st.button("Amazon用リライトを実行"):
                 if not api_key: st.error("APIキーを入力してください")
                 else:
@@ -185,7 +188,7 @@ def main():
         with col1:
             st.subheader("📥 入力エリア")
             rak_c = st.text_area("1. 現在の文章", height=150, key="r_in_c")
-            rak_k = st.text_area("2. SEOキーワード", height=80, key="r_in_k", placeholder="送料無料, あす楽, 楽天1位など")
+            rak_k = st.text_area("2. SEOキーワード", height=80, key="r_in_k")
             rak_r = st.text_area("3. レビュー内容", height=100, key="r_in_r")
             if st.button("楽天用リライトを実行", key="btn_rak"):
                 if not api_key: st.error("APIキーを入力してください")
