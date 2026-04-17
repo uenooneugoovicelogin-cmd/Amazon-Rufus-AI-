@@ -13,43 +13,39 @@ def _inject_custom_style():
         background-color: #f8fafc;
       }
       
-      /* --- サイドバー（メニュー）の徹底した視認性向上 --- */
+      /* =========================================
+         サイドバー（ダークテーマ）
+      ========================================= */
       [data-testid="stSidebar"] {
-        background-color: #0f172a !important; /* 濃紺 */
+        background-color: #0f172a !important; 
       }
-      
-      /* 見出し、メインラベルを白に統一 */
       [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
       [data-testid="stSidebar"] .stMarkdown p,
       [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
         color: #ffffff !important;
         font-weight: 600 !important;
       }
-
-      /* ★修正ポイント：ラジオボタンの選択肢テキストを強制的に真っ白にする★ */
       [data-testid="stSidebar"] div[role="radiogroup"] label div {
         color: #ffffff !important;
       }
-
-      /* 入力ボックス（セレクトボックス・テキスト入力）をダーク仕様に変更 */
-      [data-testid="stSidebar"] .stTextInput input, 
+      /* サイドバー内の入力ボックス */
+      [data-testid="stSidebar"] input, 
+      [data-testid="stSidebar"] textarea,
       [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #1e293b !important; /* ボックス内を少し明るい紺に */
-        color: #ffffff !important; /* 入力文字は白 */
+        background-color: #1e293b !important; 
+        color: #ffffff !important; 
         border: 1px solid #334155 !important;
       }
-      
-      /* セレクトボックスで選択されている文字自体も白に */
       [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span {
         color: #ffffff !important;
       }
-      
-      /* ただし、セレクトボックスの「プルダウンメニュー内」のリストは白背景＋黒文字で見やすく */
       div[data-baseweb="popover"] * {
         color: #0f172a !important; 
       }
 
-      /* --- メインエリアのカード型デザイン --- */
+      /* =========================================
+         メインエリア（ライトテーマ強制）
+      ========================================= */
       div[data-testid="stVerticalBlock"] > div.stColumn {
         background: #ffffff;
         padding: 30px !important;
@@ -57,8 +53,15 @@ def _inject_custom_style():
         box-shadow: 0 4px 20px rgba(0,0,0,0.08);
         border: 1px solid #e2e8f0;
       }
+      
+      /* ★修正ポイント1：メインエリアのテキストエリアの文字を強制的に黒にする★ */
+      textarea {
+        color: #0f172a !important; /* 濃いグレー（ほぼ黒） */
+        background-color: #f1f5f9 !important; /* 視認性の良い薄いグレー背景 */
+        border: 1px solid #cbd5e1 !important;
+      }
 
-      /* 実行ボタン（プロフェッショナルな青） */
+      /* 実行ボタン */
       div.stButton > button:first-child {
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
         color: white !important;
@@ -72,7 +75,7 @@ def _inject_custom_style():
         transform: scale(1.02);
       }
       
-      /* コピーボタン（控えめで清潔なデザイン） */
+      /* コピーボタン */
       .copy-area button {
         background-color: #eff6ff !important;
         color: #2563eb !important;
@@ -93,16 +96,9 @@ def _inject_custom_style():
       .badge-ok { background-color: #dcfce7; color: #166534; }
       .badge-ng { background-color: #fee2e2; color: #991b1b; }
 
-      /* タブのデザイン */
       .stTabs [data-baseweb="tab-list"] { background-color: transparent; }
-      .stTabs [data-baseweb="tab"] {
-        font-weight: bold;
-        color: #64748b;
-      }
-      .stTabs [aria-selected="true"] {
-        color: #2563eb !important;
-        border-bottom-color: #2563eb !important;
-      }
+      .stTabs [data-baseweb="tab"] { font-weight: bold; color: #64748b; }
+      .stTabs [aria-selected="true"] { color: #2563eb !important; border-bottom-color: #2563eb !important; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -155,7 +151,18 @@ def main():
                 if not api_key: st.error("APIキーを入力してください")
                 else:
                     with st.spinner("AIが箇条書きを生成中..."):
-                        p = f"Amazon用。箇条書き(bullet_1〜5:各95字程度), 詳細説明(description)をJSONで。ジャンル:{genre}。トーン:{tone}。データ:{amz_c}/{amz_s}/{amz_r}"
+                        # ★修正ポイント2：AIへの指示を厳格化し、エラーを防ぐ★
+                        p = f"""Amazon用の商品説明を作成してください。以下の厳密なJSONフォーマットで出力してください。
+{{
+  "bullet_1": "箇条書き1(95字程度)",
+  "bullet_2": "箇条書き2(95字程度)",
+  "bullet_3": "箇条書き3(95字程度)",
+  "bullet_4": "箇条書き4(95字程度)",
+  "bullet_5": "箇条書き5(95字程度)",
+  "description": "詳細説明文"
+}}
+ジャンル:{genre}。トーン:{tone}。
+データ:{amz_c} / {amz_s} / {amz_r}"""
                         st.session_state.amz_res = _call_gemini(api_key, model_name, p)
 
         with col2:
@@ -167,9 +174,9 @@ def main():
                     for i in range(1, 6):
                         txt = res.get(f"bullet_{i}", "")
                         count = len(txt)
-                        badge_class = "badge-ok" if count <= 100 else "badge-ng"
+                        badge_class = "badge-ok" if count > 0 and count <= 100 else "badge-ng"
                         st.markdown(f'<span class="count-badge {badge_class}">箇条書き {i} : {count} / 100文字</span>', unsafe_allow_html=True)
-                        st.text_area(f"B{i}", value=txt, height=75, key=f"amz_b{i}", label_visibility="collapsed")
+                        st.text_area(f"B{i}", value=txt, height=85, key=f"amz_b{i}", label_visibility="collapsed")
                         st.markdown('<div class="copy-area">', unsafe_allow_html=True)
                         if st.button(f"箇条書き {i} をコピー", key=f"cp_amz_b{i}"):
                             st.write(f'<script>navigator.clipboard.writeText(`{txt}`);</script>', unsafe_allow_html=True)
@@ -195,7 +202,14 @@ def main():
                 if not api_key: st.error("APIキーを入力してください")
                 else:
                     with st.spinner("楽天SEOに最適化中..."):
-                        p = f"楽天用(catchcopy, desc_text, desc_html)。JSONで。レビュー反映重視。KW:{rak_k}。トーン:{tone}。データ:{rak_c}/{rak_r}"
+                        p = f"""楽天用の商品説明を作成してください。以下の厳密なJSONフォーマットで出力してください。
+{{
+  "catchcopy": "キャッチコピー",
+  "desc_text": "説明文(テキスト)",
+  "desc_html": "説明文(HTMLコード)"
+}}
+レビュー反映重視。KW:{rak_k}。トーン:{tone}。
+データ:{rak_c} / {rak_r}"""
                         st.session_state.rak_res = _call_gemini(api_key, model_name, p)
         
         with col2:
