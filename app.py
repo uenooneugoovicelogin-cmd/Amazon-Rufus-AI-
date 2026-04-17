@@ -1,6 +1,7 @@
 import streamlit as st
 import google.generativeai as genai
 import json
+import streamlit.components.v1 as components
 
 # --- ページ設定 ---
 st.set_page_config(page_title="Rufus ＆ 楽天AI モール別対策ツール", layout="wide")
@@ -8,99 +9,60 @@ st.set_page_config(page_title="Rufus ＆ 楽天AI モール別対策ツール", 
 def _inject_custom_style():
     st.markdown("""
     <style>
-      /* --- 全体背景 --- */
-      html, body, [data-testid="stAppViewContainer"] {
-        background-color: #f8fafc;
-      }
-      
-      /* =========================================
-         サイドバー（ダークテーマ）
-      ========================================= */
-      [data-testid="stSidebar"] {
-        background-color: #0f172a !important; 
-      }
+      html, body, [data-testid="stAppViewContainer"] { background-color: #f8fafc; }
+      [data-testid="stSidebar"] { background-color: #0f172a !important; }
       [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
-      [data-testid="stSidebar"] .stMarkdown p,
-      [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
-        color: #ffffff !important;
-        font-weight: 600 !important;
+      [data-testid="stSidebar"] .stMarkdown p, [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
+        color: #ffffff !important; font-weight: 600 !important;
       }
-      [data-testid="stSidebar"] div[role="radiogroup"] label div {
-        color: #ffffff !important;
-      }
-      /* サイドバー内の入力ボックス */
-      [data-testid="stSidebar"] input, 
-      [data-testid="stSidebar"] textarea,
+      [data-testid="stSidebar"] div[role="radiogroup"] label div { color: #ffffff !important; }
+      [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea,
       [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
-        background-color: #1e293b !important; 
-        color: #ffffff !important; 
-        border: 1px solid #334155 !important;
+        background-color: #1e293b !important; color: #ffffff !important; border: 1px solid #334155 !important;
       }
-      [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span {
-        color: #ffffff !important;
-      }
-      div[data-baseweb="popover"] * {
-        color: #0f172a !important; 
-      }
-
-      /* =========================================
-         メインエリア（ライトテーマ強制）
-      ========================================= */
+      [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
+      
       div[data-testid="stVerticalBlock"] > div.stColumn {
-        background: #ffffff;
-        padding: 30px !important;
-        border-radius: 12px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        border: 1px solid #e2e8f0;
+        background: #ffffff; padding: 25px !important; border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.08); border: 1px solid #e2e8f0;
       }
+      textarea { color: #0f172a !important; background-color: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; }
       
-      /* ★修正ポイント1：メインエリアのテキストエリアの文字を強制的に黒にする★ */
-      textarea {
-        color: #0f172a !important; /* 濃いグレー（ほぼ黒） */
-        background-color: #f1f5f9 !important; /* 視認性の良い薄いグレー背景 */
-        border: 1px solid #cbd5e1 !important;
-      }
-
-      /* 実行ボタン */
-      div.stButton > button:first-child {
+      .stButton > button {
         background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 8px !important;
-        font-weight: bold !important;
-        height: 3.8em !important;
-        transition: transform 0.2s ease;
+        color: white !important; font-weight: bold !important; width: 100%; height: 3.5em; border-radius: 8px !important;
       }
-      div.stButton > button:hover {
-        transform: scale(1.02);
-      }
-      
-      /* コピーボタン */
-      .copy-area button {
-        background-color: #eff6ff !important;
-        color: #2563eb !important;
-        border: 1px solid #bfdbfe !important;
-        font-size: 0.85rem !important;
-        margin-top: -12px !important;
-      }
-
-      /* 文字数バッジ */
-      .count-badge {
-        display: inline-block;
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.75rem;
-        font-weight: bold;
-        margin-bottom: 6px;
-      }
+      .count-badge { display: inline-block; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; margin-bottom: 6px; }
       .badge-ok { background-color: #dcfce7; color: #166534; }
       .badge-ng { background-color: #fee2e2; color: #991b1b; }
-
-      .stTabs [data-baseweb="tab-list"] { background-color: transparent; }
-      .stTabs [data-baseweb="tab"] { font-weight: bold; color: #64748b; }
-      .stTabs [aria-selected="true"] { color: #2563eb !important; border-bottom-color: #2563eb !important; }
     </style>
     """, unsafe_allow_html=True)
+
+# ★新機能：確実にクリップボードにコピーするHTMLコンポーネント★
+def st_copy_button(text, label):
+    safe_text = text.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$').replace('\n', '\\n')
+    html_code = f"""
+    <button id="copy-btn" style="
+        background-color: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe;
+        padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; width: 100%;
+    ">{label} をコピー</button>
+    <script>
+    document.getElementById('copy-btn').onclick = function() {{
+        const text = `{safe_text}`;
+        navigator.clipboard.writeText(text).then(() => {{
+            this.innerText = "✅ コピー完了！";
+            this.style.backgroundColor = "#dcfce7";
+            this.style.color = "#166534";
+            setTimeout(() => {{
+                this.innerText = "{label} をコピー";
+                this.style.backgroundColor = "#eff6ff";
+                this.style.color = "#2563eb";
+            }}, 2000);
+        }});
+    }};
+    </script>
+    """
+    components.html(html_code, height=45)
 
 def _call_gemini(api_key, model_name, prompt):
     try:
@@ -108,126 +70,39 @@ def _call_gemini(api_key, model_name, prompt):
         model = genai.GenerativeModel(model_name=model_name)
         response = model.generate_content(prompt)
         text = response.text
-        if "```" in text:
-            text = text.split("```")[1].replace("json", "").strip()
-        return json.loads(text)
-    except Exception as e:
-        return {"error": str(e)}
+        if "
+http://googleusercontent.com/immersive_entry_chip/0
 
-def main():
-    _inject_custom_style()
-    st.title("🛡️ Rufus ＆ 楽天AI モール別対策ツール")
-    
-    with st.sidebar:
-        st.header("🔑 接続設定")
-        api_key = st.text_input("Gemini APIキー", type="password", placeholder="ここに貼り付け")
-        
-        # モデル自動取得
-        model_name = "gemini-1.5-flash"
-        if api_key:
-            try:
-                genai.configure(api_key=api_key)
-                models = [m.name.replace('models/', '') for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                model_name = st.selectbox("使用AIモデル", models)
-            except:
-                model_name = st.selectbox("使用AIモデル", ["gemini-1.5-flash", "gemini-1.5-pro"])
-        
-        st.divider()
-        st.header("🎨 リライト設定")
-        genre = st.selectbox("商品ジャンル", ["一般雑貨", "季節行事（ハロウィン等）", "推し活・ホビー", "介護・看護", "ベビー", "ペット", "スポーツ", "園芸", "その他"])
-        tone = st.radio("文章のトーン", ["誠実・信頼（推奨）", "情熱的・売込重視", "簡潔・ロジカル"])
+---
 
-    tab_amz, tab_rak = st.tabs(["🛒 Amazon用 (Rufus対策)", "🔴 楽天用 (AI・SEO対策)"])
+## 🛡️ スタッフ向け：モール別AI対策ツール仕様書
 
-    # --- Amazon タブ ---
-    with tab_amz:
-        col1, col2 = st.columns([1, 1.2], gap="large")
-        with col1:
-            st.subheader("📥 元情報を入力")
-            amz_c = st.text_area("1. 現在の商品説明・箇条書き", height=150)
-            amz_s = st.text_area("2. 補足スペック・仕様", height=100)
-            amz_r = st.text_area("3. カスタマーレビュー（悩み等）", height=100)
-            if st.button("Amazon用のリライトを実行"):
-                if not api_key: st.error("APIキーを入力してください")
-                else:
-                    with st.spinner("AIが箇条書きを生成中..."):
-                        # ★修正ポイント2：AIへの指示を厳格化し、エラーを防ぐ★
-                        p = f"""Amazon用の商品説明を作成してください。以下の厳密なJSONフォーマットで出力してください。
-{{
-  "bullet_1": "箇条書き1(95字程度)",
-  "bullet_2": "箇条書き2(95字程度)",
-  "bullet_3": "箇条書き3(95字程度)",
-  "bullet_4": "箇条書き4(95字程度)",
-  "bullet_5": "箇条書き5(95字程度)",
-  "description": "詳細説明文"
-}}
-ジャンル:{genre}。トーン:{tone}。
-データ:{amz_c} / {amz_s} / {amz_r}"""
-                        st.session_state.amz_res = _call_gemini(api_key, model_name, p)
+社内での共有・説明にご活用ください。
 
-        with col2:
-            st.subheader("📤 AIリライト結果")
-            if "amz_res" in st.session_state:
-                res = st.session_state.amz_res
-                if "error" in res: st.error(res['error'])
-                else:
-                    for i in range(1, 6):
-                        txt = res.get(f"bullet_{i}", "")
-                        count = len(txt)
-                        badge_class = "badge-ok" if count > 0 and count <= 100 else "badge-ng"
-                        st.markdown(f'<span class="count-badge {badge_class}">箇条書き {i} : {count} / 100文字</span>', unsafe_allow_html=True)
-                        st.text_area(f"B{i}", value=txt, height=85, key=f"amz_b{i}", label_visibility="collapsed")
-                        st.markdown('<div class="copy-area">', unsafe_allow_html=True)
-                        if st.button(f"箇条書き {i} をコピー", key=f"cp_amz_b{i}"):
-                            st.write(f'<script>navigator.clipboard.writeText(`{txt}`);</script>', unsafe_allow_html=True)
-                            st.toast(f"箇条書き{i}をコピー！")
-                        st.markdown('</div>', unsafe_allow_html=True)
+### 1. 開発の背景：AIが「接客」する時代の到来
+現在、Amazonや楽天では、AIがお客様の質問に答えて商品をおすすめする機能が導入されています。
+* **Amazon Rufus**: 「このポーチに15cmのぬいぐるみが2体入る？」といった具体的な質問に答えます。
+* **楽天AI**: 「母の日のギフトに最適な、高評価でラッピング対応の商品はどれ？」といった探しものを助けます。
+このツールは、**AIが「この商品が正解です！」と答えやすくするための情報整備**を行います。
 
-                    desc = res.get("description", "")
-                    st.markdown(f'<span class="count-badge badge-ok">商品紹介文（全文）: {len(desc)}文字</span>', unsafe_allow_html=True)
-                    st.text_area("説明", value=desc, height=200, label_visibility="collapsed")
-                    if st.button("紹介文全文をコピー"):
-                        st.write(f'<script>navigator.clipboard.writeText(`{desc}`);</script>', unsafe_allow_html=True)
-                        st.toast("紹介文をコピーしました")
+### 2. モール別リライトの特徴
 
-    # --- 楽天 タブ ---
-    with tab_rak:
-        col1, col2 = st.columns([1, 1.2], gap="large")
-        with col1:
-            st.subheader("📥 元情報を入力")
-            rak_c = st.text_area("1. 現在の文章", height=150, key="r_in_c")
-            rak_k = st.text_area("2. SEO・キーワード", height=80, key="r_in_k", placeholder="例：送料無料, 楽天1位, 2024新作")
-            rak_r = st.text_area("3. レビュー内容", height=100, key="r_in_r")
-            if st.button("楽天用のリライトを実行", key="btn_rak"):
-                if not api_key: st.error("APIキーを入力してください")
-                else:
-                    with st.spinner("楽天SEOに最適化中..."):
-                        p = f"""楽天用の商品説明を作成してください。以下の厳密なJSONフォーマットで出力してください。
-{{
-  "catchcopy": "キャッチコピー",
-  "desc_text": "説明文(テキスト)",
-  "desc_html": "説明文(HTMLコード)"
-}}
-レビュー反映重視。KW:{rak_k}。トーン:{tone}。
-データ:{rak_c} / {rak_r}"""
-                        st.session_state.rak_res = _call_gemini(api_key, model_name, p)
-        
-        with col2:
-            st.subheader("📤 AIリライト結果")
-            if "rak_res" in st.session_state:
-                res = st.session_state.rak_res
-                if "error" in res: st.error(res["error"])
-                else:
-                    targets = [("catchcopy", "キャッチコピー"), ("desc_text", "説明文(テキスト)"), ("desc_html", "説明文(HTMLコード)")]
-                    for key_name, label in targets:
-                        val = res.get(key_name, "")
-                        st.markdown(f'<span class="count-badge badge-ok">{label}: {len(val)}文字</span>', unsafe_allow_html=True)
-                        st.text_area(label, value=val, height=120, key=f"out_rak_{key_name}", label_visibility="collapsed")
-                        st.markdown('<div class="copy-area">', unsafe_allow_html=True)
-                        if st.button(f"{label}をコピー", key=f"cp_rak_{key_name}"):
-                            st.write(f'<script>navigator.clipboard.writeText(`{val}`);</script>', unsafe_allow_html=True)
-                            st.toast(f"{label}をコピー！")
-                        st.markdown('</div>', unsafe_allow_html=True)
+#### 🛒 Amazon (Rufus対策モード)
+AmazonのAI「Rufus」は、商品ページ内の情報を非常に細かく読み取ります。
+* **焦点**: 「事実」と「数値」の網羅。
+* **AIへのアプローチ**: 箇条書き1つを100文字以内に収めつつ、スペック（素材・サイズ・対応機種）を凝縮。AIが「はい、入ります」と即答できる文章を作ります。
+* **出力**: 規約に準拠した5つの箇条書き。
 
-if __name__ == "__main__":
-    main()
+#### 🔴 楽天 (AI・SEO対策モード)
+楽天のAIや検索エンジンは、キーワードの関連性と、レビューに基づいた信頼性を重視します。
+* **焦点**: 「共感」と「キーワード」。
+* **AIへのアプローチ**: 指定したSEOキーワードを自然に組み込みつつ、レビューで高く評価されているポイントを文章化。「みんなが選んでいる理由」をAIに学習させます。
+* **出力**: キャッチコピーに加え、テキスト版と装飾用のHTML版の2種類を生成。
+
+### 3. 入力のコツ（ここが品質を分けます）
+AIの精度を最大化するため、以下の情報をスタッフ間で共有してください。
+1.  **「補足スペック」をサボらない**: 素材名、ミリ単位のサイズ、耐荷重など。これがないと、AIは「具体的な回答」ができません。
+2.  **「低評価レビュー」も入れる**: 「思ったより重かった」というレビューがあれば、AIは「重厚でしっかりした造り」や「安定感を重視した設計」といった、**欠点を強みに変える表現**を提案してくれます。
+
+### 4. 操作上の注意
+* **コピーボタン**: 各項目の下のボタンを押すと、クリップボードに保存されます。「コピー完了！」と表示されたら、そのままAmazonセラーセントラルや楽天RMSに貼り付けてください。
