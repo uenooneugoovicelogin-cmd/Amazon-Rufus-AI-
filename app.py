@@ -178,6 +178,99 @@ class ContentSchema(BaseModel):
     rakuten_output: RakutenOutput
 
 # =========================================================================
+# フラットスキーマ（全フィールド str のみ・ネスト/List なし）
+# Geminiの構造化出力はList[str]やネストクラスでフィールド欠落が発生しやすいため、
+# フラット構造で確実に生成させ、パース後に元のネスト構造に組み直す。
+# =========================================================================
+class AnalysisSchemaFlat(BaseModel):
+    # product_profile
+    selected_type: str = Field(description="商品タイプ: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか")
+    type_reason: str = Field(description="判定理由を60〜100文字で")
+    extracted_usp: str = Field(description="独自の強み・専門情報を100〜150文字で")
+    target_persona: str = Field(description="主要ターゲット像（年齢・状況・購入動機）1〜2文")
+    key_seo_keywords_csv: str = Field(description="展開SEOキーワード5〜10個をカンマ区切りで（例: 介護用クッション,体圧分散,通気性）")
+    # negative_review_analysis
+    identified_pain_point: str = Field(description="最大の不安・不満点を1文で")
+    pain_point_severity: str = Field(description="深刻度: 高 / 中 / 低 のいずれか")
+    pattern_a_text: str = Field(description="パターンA（利点強調）80〜120文字")
+    pattern_b_text: str = Field(description="パターンB（誠実開示）80〜120文字")
+    pattern_c_text: str = Field(description="パターンC（メリット変換）80〜120文字")
+    recommended_pattern: str = Field(description="推奨パターン: A / B / C のいずれか1文字")
+    ai_recommendation: str = Field(description="推奨理由100〜150文字")
+
+class ContentSchemaFlat(BaseModel):
+    # Amazon
+    amz_title: str = Field(description="Amazon商品名。50〜75文字絶対厳守。ブランド→主要KW→スペック→用途")
+    amz_product_highlights: str = Field(description="商品ハイライト。カンマ区切りキーワード7〜15個。例: 介護用クッション,体圧分散,低反発ウレタン,通気メッシュ,洗える")
+    amz_bullet_1_theme: str = Field(description="箇条書き1テーマ: 主要ベネフィット/独自技術・素材/使用シーン・対象者/品質・安全性・保証/使い方・お手入れ/サイズ・スペック/安全上の注意 のいずれか")
+    amz_bullet_1_body: str = Field(description="箇条書き1本文80〜120文字")
+    amz_bullet_2_theme: str = Field(description="箇条書き2テーマ（1と重複禁止）")
+    amz_bullet_2_body: str = Field(description="箇条書き2本文80〜120文字")
+    amz_bullet_3_theme: str = Field(description="箇条書き3テーマ")
+    amz_bullet_3_body: str = Field(description="箇条書き3本文80〜120文字")
+    amz_bullet_4_theme: str = Field(description="箇条書き4テーマ")
+    amz_bullet_4_body: str = Field(description="箇条書き4本文80〜120文字")
+    amz_bullet_5_theme: str = Field(description="箇条書き5テーマ")
+    amz_bullet_5_body: str = Field(description="箇条書き5本文80〜120文字")
+    amz_description: str = Field(description="Amazon商品説明文500〜800文字")
+    amz_qa_1: str = Field(description="Rufus想定Q&A 1個目。『Q: 質問 / A: 回答』形式")
+    amz_qa_2: str = Field(description="Rufus想定Q&A 2個目")
+    amz_qa_3: str = Field(description="Rufus想定Q&A 3個目")
+    amz_qa_4: str = Field(description="Rufus想定Q&A 4個目")
+    amz_qa_5: str = Field(description="Rufus想定Q&A 5個目")
+    # 楽天
+    rak_catchcopy: str = Field(description="楽天キャッチコピー60〜120文字（絶対上限127）")
+    rak_desc_text: str = Field(description="楽天テキスト説明300〜600文字")
+    rak_desc_html: str = Field(description="楽天HTML説明。h3見出し3〜5個、ulリスト活用、strong強調は要所のみ")
+    rak_search_kw: str = Field(description="楽天検索キーワード欄。半角スペース区切り10〜30個")
+
+def _unflatten_analysis(flat: dict) -> dict:
+    """フラットな分析結果を元のネスト構造に組み直す。"""
+    kw_csv = flat.get("key_seo_keywords_csv", "") or ""
+    kws = [k.strip() for k in kw_csv.split(",") if k.strip()]
+    return {
+        "product_profile": {
+            "selected_type": flat.get("selected_type", ""),
+            "type_reason": flat.get("type_reason", ""),
+            "extracted_usp": flat.get("extracted_usp", ""),
+            "target_persona": flat.get("target_persona", ""),
+            "key_seo_keywords": kws,
+        },
+        "negative_review_analysis": {
+            "identified_pain_point": flat.get("identified_pain_point", ""),
+            "pain_point_severity": flat.get("pain_point_severity", ""),
+            "pattern_a_text": flat.get("pattern_a_text", ""),
+            "pattern_b_text": flat.get("pattern_b_text", ""),
+            "pattern_c_text": flat.get("pattern_c_text", ""),
+            "recommended_pattern": flat.get("recommended_pattern", ""),
+            "ai_recommendation": flat.get("ai_recommendation", ""),
+        },
+    }
+
+def _unflatten_content(flat: dict) -> dict:
+    """フラットな成果物を元のネスト構造に組み直す。"""
+    qa_pairs = [flat.get(f"amz_qa_{i}", "") for i in range(1, 6)]
+    qa_pairs = [q for q in qa_pairs if q]
+    amazon = {
+        "title": flat.get("amz_title", ""),
+        "product_highlights": flat.get("amz_product_highlights", ""),
+        "description": flat.get("amz_description", ""),
+        "rufus_qa_pairs": qa_pairs,
+    }
+    for i in range(1, 6):
+        amazon[f"bullet_{i}"] = {
+            "theme": flat.get(f"amz_bullet_{i}_theme", ""),
+            "body": flat.get(f"amz_bullet_{i}_body", ""),
+        }
+    rakuten = {
+        "catchcopy": flat.get("rak_catchcopy", ""),
+        "desc_text": flat.get("rak_desc_text", ""),
+        "desc_html": flat.get("rak_desc_html", ""),
+        "search_keywords_field": flat.get("rak_search_kw", ""),
+    }
+    return {"amazon_output": amazon, "rakuten_output": rakuten}
+
+# =========================================================================
 # System Instruction（大幅強化）
 # =========================================================================
 def build_system_instruction(tone_rule: str) -> str:
@@ -414,13 +507,13 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
                             temperature: float = 0.5,
                             thinking_budget: int = 2048,
                             progress_cb=None) -> dict:
-    """2段階生成: 分析→成果物 に分けてスキーマ複雑度を下げる。
+    """2段階生成: 分析→成果物 に分けてフラットスキーマで確実に生成する。
 
-    Stage 1で product_profile と negative_review_analysis を確定させ、
-    Stage 2ではその結果を「与えられた前提」として amazon_output と rakuten_output を生成する。
-    各段のスキーマが半分になるため、Geminiが全フィールドを埋めやすい。
+    Geminiの構造化出力はList[str]やネストクラスでフィールド欠落が起きやすいため、
+    各段とも全フィールドをstrに平坦化したスキーマで呼び出す。
+    パース後に元のネスト構造へ組み直して返す。
     """
-    # ---- Stage 1: 分析 ----
+    # ---- Stage 1: 分析（フラット12フィールド） ----
     if progress_cb:
         progress_cb("Stage 1/2: 商品プロファイリング＆レビュー分析中...")
 
@@ -437,32 +530,51 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 4. カスタマーレビュー: {review}
 
 【指示】
-以下2ブロックのみを構造化出力してください。全フィールドを必ず埋めてください。
-- product_profile: 商品タイプ判定、判定理由、抽出USP、ターゲット像、展開SEOキーワード5〜10個
-- negative_review_analysis: 最大の不安点、深刻度、A/B/C変換3パターン、推奨パターン、推奨理由
+以下12フィールドを全て埋めた JSON を出力してください。1フィールドも省略・空文字禁止。
+
+# プロファイル系
+1. selected_type: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか
+2. type_reason: 判定理由（60〜100文字）
+3. extracted_usp: 独自の強み・専門情報（100〜150文字）
+4. target_persona: ターゲット像（年齢・状況・購入動機、1〜2文）
+5. key_seo_keywords_csv: 展開SEOキーワード5〜10個をカンマ区切り
+
+# ネガティブレビュー分析系
+6. identified_pain_point: 最大の不安・不満点（1文）
+7. pain_point_severity: 高 / 中 / 低 のいずれか
+8. pattern_a_text: 利点強調パターン（80〜120文字）
+9. pattern_b_text: 誠実開示パターン（80〜120文字）
+10. pattern_c_text: メリット変換パターン（80〜120文字）
+11. recommended_pattern: A / B / C のいずれか1文字
+12. ai_recommendation: 推奨理由（100〜150文字）
 """
     stage1 = _call_gemini_api(
         api_key, model_name, stage1_prompt, system_instruction,
         temperature=temperature, thinking_budget=thinking_budget,
-        response_schema=AnalysisSchema,
+        response_schema=AnalysisSchemaFlat,
     )
     if "error" in stage1:
         return {"error": f"[Stage1エラー] {stage1['error']}",
                 "raw": stage1.get("raw", ""),
                 "_meta": stage1.get("_meta", {})}
 
-    # ---- Stage 2: 成果物 ----
+    # フラット→ネスト変換
+    stage1_nested = _unflatten_analysis(stage1)
+    pp = stage1_nested["product_profile"]
+    nra = stage1_nested["negative_review_analysis"]
+
+    # ---- Stage 2: 成果物（フラット22フィールド） ----
     if progress_cb:
         progress_cb("Stage 2/2: Amazon＆楽天テキスト生成中...")
 
-    # Stage1の結果をStage2の文脈に含める
-    pp = stage1.get("product_profile", {})
-    nra = stage1.get("negative_review_analysis", {})
+    recommended = str(nra.get("recommended_pattern", "b")).lower()
+    recommended_text = nra.get(f"pattern_{recommended}_text", "")
+
     stage2_prompt = f"""
 【商品情報】
 - ジャンル: {genre}
 - 文章トーン: {tone}
-- 狙いSEOキーワード: {seo_kw if seo_kw else "（未入力：Stage1のkey_seo_keywordsを活用）"}
+- 狙いSEOキーワード: {seo_kw if seo_kw else "（Stage1のkey_seo_keywordsを活用）"}
 
 【入力データ】
 1. 現在の商品説明: {base}
@@ -470,36 +582,48 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 3. スペック・仕様: {spec}
 4. カスタマーレビュー: {review}
 
-【Stage1で確定済みの分析結果（これを前提として使うこと）】
+【Stage1で確定済みの分析結果（前提として使用）】
 - 商品タイプ: {pp.get('selected_type', '')}
-- 判定理由: {pp.get('type_reason', '')}
 - 抽出USP: {pp.get('extracted_usp', '')}
 - ターゲット像: {pp.get('target_persona', '')}
 - 展開SEOキーワード: {', '.join(pp.get('key_seo_keywords', []) or [])}
 - 最大の不安点: {nra.get('identified_pain_point', '')}
-- 推奨パターン: {nra.get('recommended_pattern', '')}（{nra.get('ai_recommendation', '')}）
-- 推奨パターン本文: {nra.get('pattern_' + str(nra.get('recommended_pattern', 'b')).lower() + '_text', '')}
+- 推奨パターン: {nra.get('recommended_pattern', '')}
+- 推奨パターン本文: {recommended_text}
 
 【指示】
-以下2ブロックのみを構造化出力してください。全フィールドを必ず埋めてください。
-- amazon_output: title(75字以内)、product_highlights(カンマ区切り7-15個)、bullet_1〜5(themeとbody)、description、rufus_qa_pairs 5個
-- rakuten_output: catchcopy(127字以内)、desc_text、desc_html、search_keywords_field
+以下22フィールドを全て埋めた JSON を出力してください。1フィールドも省略・空文字禁止。
 
-推奨パターン本文を各説明文の中に適切に織り込むこと。
+# Amazon系
+1. amz_title: 商品名（50〜75文字、絶対上限75文字）
+2. amz_product_highlights: 商品ハイライト（カンマ区切り7〜15個）
+3-12. amz_bullet_1_theme, amz_bullet_1_body, ..., amz_bullet_5_theme, amz_bullet_5_body:
+     箇条書き5本のテーマと本文。テーマは重複禁止。本文は各80〜120文字。
+13. amz_description: 商品説明文（500〜800文字）
+14-18. amz_qa_1〜5: Rufus想定Q&A。『Q: 質問 / A: 回答』形式
+
+# 楽天系
+19. rak_catchcopy: キャッチコピー（60〜120文字、絶対上限127）
+20. rak_desc_text: テキスト説明文（300〜600文字）
+21. rak_desc_html: HTML説明文（h3見出し3〜5個、ulリスト、strong強調）
+22. rak_search_kw: 検索キーワード欄（半角スペース区切り10〜30個）
+
+推奨パターン本文（{recommended_text[:80]}...）を各説明文の中に適切に織り込むこと。
 """
     stage2 = _call_gemini_api(
         api_key, model_name, stage2_prompt, system_instruction,
         temperature=temperature, thinking_budget=thinking_budget,
-        response_schema=ContentSchema,
+        response_schema=ContentSchemaFlat,
     )
     if "error" in stage2:
-        # Stage1の結果は保持したまま、Stage2失敗を通知
         return {"error": f"[Stage2エラー] {stage2['error']}",
                 "raw": stage2.get("raw", ""),
                 "_meta": stage2.get("_meta", {}),
-                # Stage1成功分は表示可能にする
-                "product_profile": stage1.get("product_profile"),
-                "negative_review_analysis": stage1.get("negative_review_analysis")}
+                "product_profile": pp,
+                "negative_review_analysis": nra}
+
+    # フラット→ネスト変換
+    stage2_nested = _unflatten_content(stage2)
 
     # 診断メタ情報を合算
     meta1 = stage1.get("_meta", {}) or {}
@@ -517,17 +641,21 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
     }
 
     return {
-        "product_profile": stage1.get("product_profile"),
-        "negative_review_analysis": stage1.get("negative_review_analysis"),
-        "amazon_output": stage2.get("amazon_output"),
-        "rakuten_output": stage2.get("rakuten_output"),
+        "product_profile": pp,
+        "negative_review_analysis": nra,
+        "amazon_output": stage2_nested["amazon_output"],
+        "rakuten_output": stage2_nested["rakuten_output"],
         "_meta": {
             "usage": combined_usage,
             "finish_reason": f"stage1={meta1.get('finish_reason', 'N/A')}, stage2={meta2.get('finish_reason', 'N/A')}",
             "model": model_name,
             "thinking_budget": thinking_budget,
             "two_stage": True,
+            "flat_schema": True,
         },
+        # デバッグ用: 生のフラットレスポンスを保持
+        "_raw_stage1": {k: v for k, v in stage1.items() if not k.startswith("_")},
+        "_raw_stage2": {k: v for k, v in stage2.items() if not k.startswith("_")},
     }
 
 def _char_badge(text: str, target: tuple, hard_max: int = None) -> str:
@@ -910,8 +1038,7 @@ def main():
                     st.warning(
                         f"⚠️ 一部フィールドが未生成です: {', '.join(missing[:8])}"
                         + ("..." if len(missing) > 8 else "")
-                        + "。 サイドバーで『2段階生成』が ON か確認してください。"
-                        " ONでも欠落するときは思考予算を3072〜4096に上げてください。"
+                        + "。 下部『AIの生レスポンス（フラット）』を開いて実際に何が返っているか確認してください。"
                     )
 
     # ---- 結果表示 ----
@@ -946,7 +1073,23 @@ def main():
                 )
                 st.caption("『本文出力』が2000未満の場合、思考予算を下げると本文が長くなります。")
 
-        with st.expander("🧾 生JSON（デバッグ用）"):
+        # AIの生レスポンス（フラット構造の生JSON）- 診断に必須
+        raw1 = res.get("_raw_stage1")
+        raw2 = res.get("_raw_stage2")
+        if raw1 or raw2:
+            with st.expander("🔬 AIの生レスポンス（フラット構造・欠落診断用）", expanded=False):
+                if raw1:
+                    st.markdown("**Stage 1（分析）フラット出力：**")
+                    st.json(raw1)
+                if raw2:
+                    st.markdown("**Stage 2（成果物）フラット出力：**")
+                    st.json(raw2)
+                st.caption(
+                    "各フィールドがフラットな str として返されているかここで確認できます。"
+                    "空文字や欠落のフィールドがあれば、それが構造化出力失敗の証跡です。"
+                )
+
+        with st.expander("🧾 変換後JSON（デバッグ用）"):
             st.json(res)
 
 
