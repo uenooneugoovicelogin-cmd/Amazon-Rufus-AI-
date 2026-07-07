@@ -177,6 +177,14 @@ def build_system_instruction(tone_rule: str) -> str:
 - 出力は必ず指定されたJSONスキーマに完全準拠すること。
 - 文字数の指定はすべて「日本語全角＝1文字、半角英数記号＝1文字」でカウントする。
 - 文字数の下限・上限を守れない場合は言い回しを削るか補って必ず範囲内に収める。
+- 【重要】スキーマの全フィールドを必ず埋めること。以下のフィールドは絶対に省略・空文字禁止:
+  product_profile.selected_type / type_reason / extracted_usp / target_persona / key_seo_keywords
+  negative_review_analysis の全6フィールド
+  amazon_output.title / product_highlights / bullet_1〜bullet_5（theme + body 両方）/ description / rufus_qa_pairs
+  rakuten_output.catchcopy / desc_text / desc_html / search_keywords_field
+- 【重要】各フィールドの文字数上限を守り、余分な装飾は削って全フィールドを完成させることを最優先とする。
+  長さより「全フィールドの生成完了」を優先すること。
+- 【重要】JSON文字列値内の改行は\\nでエスケープし、ダブルクォートは\\"でエスケープすること。生の改行・生の"はJSON構造を壊す。
 
 # 【思考プロセス】※内部で必ず順に実行してから出力
 1. 商品タイプ判定（機能／デザイン／コスパ／総合）と判定理由
@@ -437,57 +445,105 @@ def _build_user_prompt(genre: str, tone: str, seo_kw: str,
 # =========================================================================
 # 出力レンダリング
 # =========================================================================
+def _check_schema_completeness(res: dict) -> list:
+    """AIレスポンスの必須フィールドが揃っているかチェックし、欠落したフィールドのパスを返す。"""
+    missing = []
+    # product_profile
+    pp = res.get("product_profile") or {}
+    for k in ["selected_type", "type_reason", "extracted_usp", "target_persona", "key_seo_keywords"]:
+        if not pp.get(k):
+            missing.append(f"product_profile.{k}")
+    # negative_review_analysis
+    nra = res.get("negative_review_analysis") or {}
+    for k in ["identified_pain_point", "pattern_a_text", "pattern_b_text", "pattern_c_text",
+              "recommended_pattern", "ai_recommendation"]:
+        if not nra.get(k):
+            missing.append(f"negative_review_analysis.{k}")
+    # amazon_output
+    ao = res.get("amazon_output") or {}
+    for k in ["title", "product_highlights", "description", "rufus_qa_pairs"]:
+        if not ao.get(k):
+            missing.append(f"amazon_output.{k}")
+    for i in range(1, 6):
+        b = ao.get(f"bullet_{i}")
+        if not b or not (isinstance(b, dict) and b.get("body")):
+            missing.append(f"amazon_output.bullet_{i}")
+    # rakuten_output
+    ro = res.get("rakuten_output") or {}
+    for k in ["catchcopy", "desc_text", "desc_html", "search_keywords_field"]:
+        if not ro.get(k):
+            missing.append(f"rakuten_output.{k}")
+    return missing
+
+def _g(d, key, default="（未生成）"):
+    """dictから安全に値を取得。dictでない値や欠落キーに対して default を返す。"""
+    if not isinstance(d, dict):
+        return default
+    v = d.get(key)
+    if v is None or v == "":
+        return default
+    return v
+
 def render_profile_and_reviews(res: dict):
     st.header("🧠 AI分析 ＆ ネガティブレビュー対策")
     col1, col2 = st.columns([1, 1.3], gap="medium")
 
     with col1:
         st.subheader("📋 商品プロファイリング")
-        p = res["product_profile"]
-        st.markdown(f"**商品タイプ**：`{p['selected_type']}`")
-        st.markdown(f"**判定理由**：{p['type_reason']}")
-        st.markdown(f"**抽出USP**：{p['extracted_usp']}")
-        st.markdown(f"**ターゲット像**：{p['target_persona']}")
+        p = res.get("product_profile") or {}
+        st.markdown(f"**商品タイプ**：`{_g(p, 'selected_type')}`")
+        st.markdown(f"**判定理由**：{_g(p, 'type_reason')}")
+        st.markdown(f"**抽出USP**：{_g(p, 'extracted_usp')}")
+        st.markdown(f"**ターゲット像**：{_g(p, 'target_persona')}")
         st.markdown("**展開SEOキーワード**：")
-        st.write("　".join([f"`{kw}`" for kw in p.get("key_seo_keywords", [])]))
+        kws = p.get("key_seo_keywords") or []
+        if kws:
+            st.write("　".join([f"`{kw}`" for kw in kws]))
+        else:
+            st.caption("（未生成）")
 
     with col2:
         st.subheader("💡 ネガティブ変換 3パターン")
-        n = res["negative_review_analysis"]
+        n = res.get("negative_review_analysis") or {}
         st.markdown(
             f"<div class='ai-box'>"
-            f"<strong>🔎 最大の不安・不満点：</strong>{n['identified_pain_point']}<br>"
-            f"<strong>⚠️ 深刻度：</strong>{n['pain_point_severity']}<br>"
-            f"<strong>🤖 推奨パターン：</strong>{n['recommended_pattern']}<br>"
-            f"<strong>💬 推奨理由：</strong>{n['ai_recommendation']}"
+            f"<strong>🔎 最大の不安・不満点：</strong>{_g(n, 'identified_pain_point')}<br>"
+            f"<strong>⚠️ 深刻度：</strong>{_g(n, 'pain_point_severity')}<br>"
+            f"<strong>🤖 推奨パターン：</strong>{_g(n, 'recommended_pattern')}<br>"
+            f"<strong>💬 推奨理由：</strong>{_g(n, 'ai_recommendation')}"
             f"</div>",
             unsafe_allow_html=True,
         )
-        st.text_area("パターンA（利点強調）", value=n["pattern_a_text"], height=90, key="pat_a")
-        st.text_area("パターンB（誠実開示：Google SEO推奨）", value=n["pattern_b_text"], height=90, key="pat_b")
-        st.text_area("パターンC（メリット変換）", value=n["pattern_c_text"], height=90, key="pat_c")
+        st.text_area("パターンA（利点強調）", value=_g(n, "pattern_a_text", ""), height=90, key="pat_a")
+        st.text_area("パターンB（誠実開示：Google SEO推奨）", value=_g(n, "pattern_b_text", ""), height=90, key="pat_b")
+        st.text_area("パターンC（メリット変換）", value=_g(n, "pattern_c_text", ""), height=90, key="pat_c")
         st.caption("※必要に応じてコピーし、各モールの説明文へ手動統合してください。")
 
 def render_amazon_tab(res: dict):
-    a = res["amazon_output"]
+    a = res.get("amazon_output") or {}
     st.subheader("📤 Amazon 最適化テキスト")
     st.caption("価格・送料表現ゼロ、Rufusが引用しやすい構造を採用。2026年仕様（タイトル75字・商品ハイライト対応）。")
 
+    if not a:
+        st.warning("⚠️ Amazon成果物が生成されませんでした。思考予算を上げて再実行してください。")
+        return
+
     # タイトル（75文字ハード上限）
+    title = a.get("title", "")
     st.markdown("##### 商品名（タイトル）※75文字ハード上限")
     st.markdown(
-        _char_badge(a["title"], AMAZON_TITLE_TARGET, hard_max=AMAZON_TITLE_HARD_MAX),
+        _char_badge(title, AMAZON_TITLE_TARGET, hard_max=AMAZON_TITLE_HARD_MAX),
         unsafe_allow_html=True,
     )
-    st.text_area("Amazonタイトル", value=a["title"], height=80,
+    st.text_area("Amazonタイトル", value=title, height=80,
                  key="amz_title", label_visibility="collapsed")
-    if len(a["title"]) > AMAZON_TITLE_HARD_MAX:
-        st.error(f"⚠️ タイトルが75文字を超えています（現在 {len(a['title'])} 文字）。再生成または手動で削ってください。")
+    if len(title) > AMAZON_TITLE_HARD_MAX:
+        st.error(f"⚠️ タイトルが75文字を超えています（現在 {len(title)} 文字）。再生成または手動で削ってください。")
 
     # 商品のハイライト（2026新仕様・SEOに影響）
     st.markdown("##### 🆕 商品のハイライト（カンマ区切りキーワード）")
     st.caption("Amazon 2026年アップデートで検索SEOに直接影響。カンマ区切りキーワードで、素材・対象・シーン・スペックを網羅。")
-    highlights = a.get("product_highlights", "")
+    highlights = a.get("product_highlights", "") or ""
     kw_list = [k.strip() for k in highlights.split(",") if k.strip()]
     st.markdown(
         _char_badge_count(kw_list, AMAZON_HIGHLIGHT_KW_TARGET),
@@ -495,7 +551,6 @@ def render_amazon_tab(res: dict):
     )
     st.text_area("Amazon商品ハイライト", value=highlights, height=90,
                  key="amz_highlights", label_visibility="collapsed")
-    # 個別キーワードを視認しやすく列挙
     if kw_list:
         st.markdown(" ".join([f'<span class="theme-tag">{kw}</span>' for kw in kw_list]),
                     unsafe_allow_html=True)
@@ -503,11 +558,11 @@ def render_amazon_tab(res: dict):
     # 箇条書き
     st.markdown("##### 箇条書き（5本）")
     for i in range(1, 6):
-        b = a[f"bullet_{i}"]
-        theme = b.get("theme", "")
-        body = b.get("body", "")
+        b = a.get(f"bullet_{i}") or {}
+        theme = b.get("theme", "") if isinstance(b, dict) else ""
+        body = b.get("body", "") if isinstance(b, dict) else ""
         st.markdown(
-            f'<span class="theme-tag">テーマ: {theme}</span>'
+            f'<span class="theme-tag">テーマ: {theme or "（未生成）"}</span>'
             f'{_char_badge(body, AMAZON_BULLET_TARGET)}',
             unsafe_allow_html=True,
         )
@@ -515,46 +570,58 @@ def render_amazon_tab(res: dict):
                      key=f"amz_b_{i}", label_visibility="collapsed")
 
     # 商品説明
+    desc = a.get("description", "") or ""
     st.markdown("##### 商品説明文")
-    st.markdown(_char_badge(a["description"], AMAZON_DESC_TARGET), unsafe_allow_html=True)
-    st.text_area("Amazon説明文", value=a["description"], height=220,
+    st.markdown(_char_badge(desc, AMAZON_DESC_TARGET), unsafe_allow_html=True)
+    st.text_area("Amazon説明文", value=desc, height=220,
                  key="amz_desc", label_visibility="collapsed")
 
     # Rufus Q&A
     st.markdown("##### Rufus想定Q&A（5個）")
     st.caption("Rufusが自然文の質問に対して抽出しやすいQ&Aペア。")
-    qa_list = a.get("rufus_qa_pairs", [])
+    qa_list = a.get("rufus_qa_pairs") or []
+    if not qa_list:
+        st.caption("（未生成）")
     for i, qa in enumerate(qa_list, 1):
-        st.text_area(f"Q&A {i}", value=qa, height=70,
+        st.text_area(f"Q&A {i}", value=str(qa), height=70,
                      key=f"amz_qa_{i}", label_visibility="collapsed")
 
 def render_rakuten_tab(res: dict):
-    r = res["rakuten_output"]
+    r = res.get("rakuten_output") or {}
     st.subheader("📤 楽天市場 最適化テキスト")
     st.caption("スマホCVR最適化 & 楽天AI検索対策。")
 
+    if not r:
+        st.warning("⚠️ 楽天成果物が生成されませんでした。思考予算を上げて再実行してください。")
+        return
+
+    catchcopy = r.get("catchcopy", "") or ""
     st.markdown("##### キャッチコピー")
     st.markdown(
-        _char_badge(r["catchcopy"], RAKUTEN_CATCH_TARGET, hard_max=RAKUTEN_CATCH_HARD_MAX),
+        _char_badge(catchcopy, RAKUTEN_CATCH_TARGET, hard_max=RAKUTEN_CATCH_HARD_MAX),
         unsafe_allow_html=True,
     )
-    st.text_area("楽天キャッチ", value=r["catchcopy"], height=80,
+    st.text_area("楽天キャッチ", value=catchcopy, height=80,
                  key="rak_catch", label_visibility="collapsed")
 
+    desc_text = r.get("desc_text", "") or ""
     st.markdown("##### 商品説明文（テキスト版）")
-    st.markdown(_char_badge(r["desc_text"], RAKUTEN_TEXT_TARGET), unsafe_allow_html=True)
-    st.text_area("楽天テキスト", value=r["desc_text"], height=180,
+    st.markdown(_char_badge(desc_text, RAKUTEN_TEXT_TARGET), unsafe_allow_html=True)
+    st.text_area("楽天テキスト", value=desc_text, height=180,
                  key="rak_text", label_visibility="collapsed")
 
+    desc_html = r.get("desc_html", "") or ""
     st.markdown("##### 商品説明文（HTML版）")
-    st.text_area("楽天HTML", value=r["desc_html"], height=260,
+    st.text_area("楽天HTML", value=desc_html, height=260,
                  key="rak_html", label_visibility="collapsed")
 
-    with st.expander("👁️ HTMLプレビュー"):
-        st.markdown(r["desc_html"], unsafe_allow_html=True)
+    if desc_html:
+        with st.expander("👁️ HTMLプレビュー"):
+            st.markdown(desc_html, unsafe_allow_html=True)
 
+    kw_field = r.get("search_keywords_field", "") or ""
     st.markdown("##### 検索キーワード欄（RMS入稿用）")
-    st.text_area("楽天KW欄", value=r["search_keywords_field"], height=80,
+    st.text_area("楽天KW欄", value=kw_field, height=80,
                  key="rak_kw", label_visibility="collapsed")
 
 # =========================================================================
@@ -577,11 +644,12 @@ def main():
         temperature = st.slider("Temperature（0.3〜0.5推奨）", 0.0, 1.0, 0.5, 0.05)
         thinking_budget = st.slider(
             "思考予算 Thinking Budget（Gemini 2.5系のみ）",
-            min_value=0, max_value=8192, value=1024, step=256,
+            min_value=512, max_value=8192, value=2048, step=256,
             help=(
-                "Gemini 2.5系は既定で大量の思考トークンを消費し、本文出力が短くなる原因になります。"
-                "1024程度に抑えると本文の生成量が回復します。"
-                "0にすると思考を最小化しますが、複雑な推論品質は下がります。"
+                "Gemini 2.5系は思考トークンを消費して構造化出力を安定させます。"
+                "低すぎるとスキーマ通りに全フィールドを生成できず欠落エラーが起きます。"
+                "本アプリのスキーマは複雑なので2048以上を推奨。"
+                "本文が短いと感じたら1024〜1536に下げ、フィールド欠落が起きたら3072〜4096に上げてください。"
             ),
         )
 
@@ -664,6 +732,15 @@ def main():
                             f"⚠️ 思考トークンが本文の3倍以上を消費しています "
                             f"(思考 {thoughts} / 本文 {output})。"
                             "サイドバーの『思考予算』を下げると本文が長くなります。"
+                        )
+
+                    # スキーマ完全性チェック（構造化出力失敗の検出）
+                    missing = _check_schema_completeness(res)
+                    if missing:
+                        st.warning(
+                            f"⚠️ 一部フィールドが未生成です: {', '.join(missing[:8])}"
+                            + ("..." if len(missing) > 8 else "")
+                            + "。 思考予算を上げて再実行するか、入力量を減らしてください。"
                         )
 
     # ---- 結果表示 ----
