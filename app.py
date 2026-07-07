@@ -166,6 +166,17 @@ class EcomUpdateSchema(BaseModel):
     amazon_output: AmazonOutput
     rakuten_output: RakutenOutput
 
+# 2段階生成用の分割スキーマ（1回あたりのフィールド数を減らして構造化失敗を防ぐ）
+class AnalysisSchema(BaseModel):
+    """Stage 1: 分析フェーズのみ"""
+    product_profile: ProductProfile
+    negative_review_analysis: NegativeReviewAnalysis
+
+class ContentSchema(BaseModel):
+    """Stage 2: 成果物生成のみ（分析結果を文脈として受け取る）"""
+    amazon_output: AmazonOutput
+    rakuten_output: RakutenOutput
+
 # =========================================================================
 # System Instruction（大幅強化）
 # =========================================================================
@@ -304,13 +315,15 @@ def _safe_json_loads(text: str) -> dict:
 def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                      system_instruction: str, temperature: float = 0.7,
                      max_retries: int = 2,
-                     thinking_budget: int = 1024) -> dict:
+                     thinking_budget: int = 1024,
+                     response_schema=EcomUpdateSchema) -> dict:
     """Gemini API を呼び出す。
 
     Gemini 2.5 Pro は既定で「思考モード」が有効で、思考が出力トークン予算を大量に消費する。
     - thinking_budget を明示することで、思考は残しつつ本文出力の余裕を確保する
     - max_output_tokens は思考＋本文の合計上限のため十分大きくする
     - 診断のため usage_metadata と finish_reason を戻り値に含める
+    - response_schema を切り替えることで、フェーズ別の小さなスキーマで安定生成できる
     """
     last_err = None
     last_raw = ""
@@ -327,7 +340,7 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
 
             gen_config = {
                 "response_mime_type": "application/json",
-                "response_schema": EcomUpdateSchema,
+                "response_schema": response_schema,
                 "temperature": temperature,
                 "top_p": 0.95,
                 "max_output_tokens": 32768,  # 思考トークン+本文の合計。Gemini 2.5系は思考が数千を消費するため大きめに
@@ -392,6 +405,129 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
         "error": last_err or "不明なエラー",
         "raw": last_raw[:2000] if last_raw else "",
         "_meta": {"usage": last_usage, "finish_reason": last_finish_reason, "model": model_name},
+    }
+
+def _call_gemini_two_stage(api_key: str, model_name: str,
+                            system_instruction: str,
+                            genre: str, tone: str, seo_kw: str,
+                            base: str, usp: str, spec: str, review: str,
+                            temperature: float = 0.5,
+                            thinking_budget: int = 2048,
+                            progress_cb=None) -> dict:
+    """2段階生成: 分析→成果物 に分けてスキーマ複雑度を下げる。
+
+    Stage 1で product_profile と negative_review_analysis を確定させ、
+    Stage 2ではその結果を「与えられた前提」として amazon_output と rakuten_output を生成する。
+    各段のスキーマが半分になるため、Geminiが全フィールドを埋めやすい。
+    """
+    # ---- Stage 1: 分析 ----
+    if progress_cb:
+        progress_cb("Stage 1/2: 商品プロファイリング＆レビュー分析中...")
+
+    stage1_prompt = f"""
+【商品情報】
+- ジャンル: {genre}
+- 文章トーン: {tone}
+- 狙いSEOキーワード: {seo_kw if seo_kw else "（未入力：文脈から自動抽出）"}
+
+【入力データ】
+1. 現在の商品説明: {base}
+2. 自社の強み・USP: {usp if usp else "（未入力：既存文から抽出）"}
+3. スペック・仕様: {spec}
+4. カスタマーレビュー: {review}
+
+【指示】
+以下2ブロックのみを構造化出力してください。全フィールドを必ず埋めてください。
+- product_profile: 商品タイプ判定、判定理由、抽出USP、ターゲット像、展開SEOキーワード5〜10個
+- negative_review_analysis: 最大の不安点、深刻度、A/B/C変換3パターン、推奨パターン、推奨理由
+"""
+    stage1 = _call_gemini_api(
+        api_key, model_name, stage1_prompt, system_instruction,
+        temperature=temperature, thinking_budget=thinking_budget,
+        response_schema=AnalysisSchema,
+    )
+    if "error" in stage1:
+        return {"error": f"[Stage1エラー] {stage1['error']}",
+                "raw": stage1.get("raw", ""),
+                "_meta": stage1.get("_meta", {})}
+
+    # ---- Stage 2: 成果物 ----
+    if progress_cb:
+        progress_cb("Stage 2/2: Amazon＆楽天テキスト生成中...")
+
+    # Stage1の結果をStage2の文脈に含める
+    pp = stage1.get("product_profile", {})
+    nra = stage1.get("negative_review_analysis", {})
+    stage2_prompt = f"""
+【商品情報】
+- ジャンル: {genre}
+- 文章トーン: {tone}
+- 狙いSEOキーワード: {seo_kw if seo_kw else "（未入力：Stage1のkey_seo_keywordsを活用）"}
+
+【入力データ】
+1. 現在の商品説明: {base}
+2. 自社の強み・USP: {usp if usp else "（未入力）"}
+3. スペック・仕様: {spec}
+4. カスタマーレビュー: {review}
+
+【Stage1で確定済みの分析結果（これを前提として使うこと）】
+- 商品タイプ: {pp.get('selected_type', '')}
+- 判定理由: {pp.get('type_reason', '')}
+- 抽出USP: {pp.get('extracted_usp', '')}
+- ターゲット像: {pp.get('target_persona', '')}
+- 展開SEOキーワード: {', '.join(pp.get('key_seo_keywords', []) or [])}
+- 最大の不安点: {nra.get('identified_pain_point', '')}
+- 推奨パターン: {nra.get('recommended_pattern', '')}（{nra.get('ai_recommendation', '')}）
+- 推奨パターン本文: {nra.get('pattern_' + str(nra.get('recommended_pattern', 'b')).lower() + '_text', '')}
+
+【指示】
+以下2ブロックのみを構造化出力してください。全フィールドを必ず埋めてください。
+- amazon_output: title(75字以内)、product_highlights(カンマ区切り7-15個)、bullet_1〜5(themeとbody)、description、rufus_qa_pairs 5個
+- rakuten_output: catchcopy(127字以内)、desc_text、desc_html、search_keywords_field
+
+推奨パターン本文を各説明文の中に適切に織り込むこと。
+"""
+    stage2 = _call_gemini_api(
+        api_key, model_name, stage2_prompt, system_instruction,
+        temperature=temperature, thinking_budget=thinking_budget,
+        response_schema=ContentSchema,
+    )
+    if "error" in stage2:
+        # Stage1の結果は保持したまま、Stage2失敗を通知
+        return {"error": f"[Stage2エラー] {stage2['error']}",
+                "raw": stage2.get("raw", ""),
+                "_meta": stage2.get("_meta", {}),
+                # Stage1成功分は表示可能にする
+                "product_profile": stage1.get("product_profile"),
+                "negative_review_analysis": stage1.get("negative_review_analysis")}
+
+    # 診断メタ情報を合算
+    meta1 = stage1.get("_meta", {}) or {}
+    meta2 = stage2.get("_meta", {}) or {}
+    u1 = meta1.get("usage") or {}
+    u2 = meta2.get("usage") or {}
+    def _add(a, b):
+        if a is None and b is None: return None
+        return (a or 0) + (b or 0)
+    combined_usage = {
+        "prompt_tokens": _add(u1.get("prompt_tokens"), u2.get("prompt_tokens")),
+        "output_tokens": _add(u1.get("output_tokens"), u2.get("output_tokens")),
+        "thoughts_tokens": _add(u1.get("thoughts_tokens"), u2.get("thoughts_tokens")),
+        "total_tokens": _add(u1.get("total_tokens"), u2.get("total_tokens")),
+    }
+
+    return {
+        "product_profile": stage1.get("product_profile"),
+        "negative_review_analysis": stage1.get("negative_review_analysis"),
+        "amazon_output": stage2.get("amazon_output"),
+        "rakuten_output": stage2.get("rakuten_output"),
+        "_meta": {
+            "usage": combined_usage,
+            "finish_reason": f"stage1={meta1.get('finish_reason', 'N/A')}, stage2={meta2.get('finish_reason', 'N/A')}",
+            "model": model_name,
+            "thinking_budget": thinking_budget,
+            "two_stage": True,
+        },
     }
 
 def _char_badge(text: str, target: tuple, hard_max: int = None) -> str:
@@ -646,10 +782,18 @@ def main():
             "思考予算 Thinking Budget（Gemini 2.5系のみ）",
             min_value=512, max_value=8192, value=2048, step=256,
             help=(
-                "Gemini 2.5系は思考トークンを消費して構造化出力を安定させます。"
-                "低すぎるとスキーマ通りに全フィールドを生成できず欠落エラーが起きます。"
-                "本アプリのスキーマは複雑なので2048以上を推奨。"
-                "本文が短いと感じたら1024〜1536に下げ、フィールド欠落が起きたら3072〜4096に上げてください。"
+                "2段階生成モードでは各段2048で十分安定します。"
+                "本文が短いと感じたら1024〜1536に下げ、"
+                "特定フィールドが欠落する場合は3072〜4096に上げてください。"
+            ),
+        )
+        two_stage = st.checkbox(
+            "🔀 2段階生成（推奨・安定性重視）",
+            value=True,
+            help=(
+                "ON: 分析→成果物 の2回に分けてAPIを呼び出します。"
+                "スキーマ複雑度が半分になるためフィールド欠落を防げます。"
+                "OFF: 1回で全部生成します（速いが複雑スキーマで欠落しやすい）。"
             ),
         )
 
@@ -697,51 +841,78 @@ def main():
             for e in errs:
                 st.error(e)
         else:
-            with st.spinner("プロのECコンサルタントAIが思考中...（規約・薬機法・E-E-A-T・AI検索対策を同時実行）"):
-                sys_inst = build_system_instruction(TONE_MAPPING[tone])
-                user_prompt = _build_user_prompt(genre, tone, c_seo, c_base, c_usp, c_spec, c_review)
-                res = _call_gemini_api(
-                    api_key, model_name, user_prompt, sys_inst,
+            sys_inst = build_system_instruction(TONE_MAPPING[tone])
+            status_placeholder = st.empty()
+
+            if two_stage:
+                # 2段階生成
+                def _progress(msg):
+                    status_placeholder.info(f"🔄 {msg}")
+
+                _progress("Stage 1/2: 商品プロファイリング＆レビュー分析中...")
+                res = _call_gemini_two_stage(
+                    api_key=api_key,
+                    model_name=model_name,
+                    system_instruction=sys_inst,
+                    genre=genre, tone=tone, seo_kw=c_seo,
+                    base=c_base, usp=c_usp, spec=c_spec, review=c_review,
                     temperature=temperature,
                     thinking_budget=thinking_budget,
+                    progress_cb=_progress,
                 )
+                status_placeholder.empty()
+            else:
+                # 1段階生成（従来）
+                with st.spinner("プロのECコンサルタントAIが思考中..."):
+                    user_prompt = _build_user_prompt(genre, tone, c_seo, c_base, c_usp, c_spec, c_review)
+                    res = _call_gemini_api(
+                        api_key, model_name, user_prompt, sys_inst,
+                        temperature=temperature,
+                        thinking_budget=thinking_budget,
+                        response_schema=EcomUpdateSchema,
+                    )
 
-                if "error" in res:
-                    st.error(f"APIエラー：{res['error']}")
-                    st.info("モデル名を切り替える／temperature を下げる／入力を短くする、などをお試しください。")
-                    if res.get("raw"):
-                        with st.expander("🔍 AIの生レスポンス（先頭2000文字・デバッグ用）"):
-                            st.code(res["raw"], language="json")
-                else:
+            if "error" in res:
+                st.error(f"APIエラー：{res['error']}")
+                st.info("モデル名を切り替える／temperature を下げる／入力を短くする、などをお試しください。")
+                if res.get("raw"):
+                    with st.expander("🔍 AIの生レスポンス（先頭2000文字・デバッグ用）"):
+                        st.code(res["raw"], language="json")
+                # Stage2失敗でもStage1の結果は表示できるように残す
+                if res.get("product_profile"):
+                    st.info("Stage1（分析）は成功しています。下部にStage1の結果のみ表示します。")
                     st.session_state["ecom_result"] = res
-                    st.success("生成が完了しました。下部で結果を確認してください。")
+            else:
+                st.session_state["ecom_result"] = res
+                st.success("生成が完了しました。下部で結果を確認してください。")
 
-                    # 診断情報：短い出力になっていないかここで即警告
-                    meta = res.get("_meta", {})
-                    usage = meta.get("usage") or {}
-                    fr = meta.get("finish_reason") or ""
-                    thoughts = usage.get("thoughts_tokens") or 0
-                    output = usage.get("output_tokens") or 0
-                    if "MAX_TOKENS" in fr:
-                        st.warning(
-                            "⚠️ 出力が最大トークン数に達して切り詰められました。"
-                            "サイドバーの『思考予算』を下げるか、モデルを Flash 系に切り替えてください。"
-                        )
-                    elif thoughts and output and thoughts > output * 3:
-                        st.warning(
-                            f"⚠️ 思考トークンが本文の3倍以上を消費しています "
-                            f"(思考 {thoughts} / 本文 {output})。"
-                            "サイドバーの『思考予算』を下げると本文が長くなります。"
-                        )
+                # 診断情報：短い出力になっていないかここで即警告
+                meta = res.get("_meta", {})
+                usage = meta.get("usage") or {}
+                fr = meta.get("finish_reason") or ""
+                thoughts = usage.get("thoughts_tokens") or 0
+                output = usage.get("output_tokens") or 0
+                if "MAX_TOKENS" in fr:
+                    st.warning(
+                        "⚠️ 出力が最大トークン数に達して切り詰められました。"
+                        "サイドバーの『思考予算』を下げるか、モデルを Flash 系に切り替えてください。"
+                    )
+                elif thoughts and output and thoughts > output * 3:
+                    st.warning(
+                        f"⚠️ 思考トークンが本文の3倍以上を消費しています "
+                        f"(思考 {thoughts} / 本文 {output})。"
+                        "サイドバーの『思考予算』を下げると本文が長くなります。"
+                    )
 
-                    # スキーマ完全性チェック（構造化出力失敗の検出）
-                    missing = _check_schema_completeness(res)
-                    if missing:
-                        st.warning(
-                            f"⚠️ 一部フィールドが未生成です: {', '.join(missing[:8])}"
-                            + ("..." if len(missing) > 8 else "")
-                            + "。 思考予算を上げて再実行するか、入力量を減らしてください。"
-                        )
+                # スキーマ完全性チェック（構造化出力失敗の検出）
+                missing = _check_schema_completeness(res)
+                if missing:
+                    st.warning(
+                        f"⚠️ 一部フィールドが未生成です: {', '.join(missing[:8])}"
+                        + ("..." if len(missing) > 8 else "")
+                        + "。 サイドバーで『2段階生成』が ON か確認してください。"
+                        " ONでも欠落するときは思考予算を3072〜4096に上げてください。"
+                    )
 
     # ---- 結果表示 ----
     if "ecom_result" in st.session_state:
