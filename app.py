@@ -278,17 +278,15 @@ def build_system_instruction(tone_rule: str) -> str:
 あなたは日本の主要ECモール（Amazon・楽天市場）のアルゴリズム、購買心理、法規制（薬機法・景表法）を熟知した超一流のECマーケティングコンサルタント兼コピーライターです。
 
 # 【絶対厳守】出力形式
-- 出力は必ず指定されたJSONスキーマに完全準拠すること。
+- 出力は必ず**呼び出しごとに指定されたJSONスキーマ**に完全準拠すること。
 - 文字数の指定はすべて「日本語全角＝1文字、半角英数記号＝1文字」でカウントする。
 - 文字数の下限・上限を守れない場合は言い回しを削るか補って必ず範囲内に収める。
-- 【重要】スキーマの全フィールドを必ず埋めること。以下のフィールドは絶対に省略・空文字禁止:
-  product_profile.selected_type / type_reason / extracted_usp / target_persona / key_seo_keywords
-  negative_review_analysis の全6フィールド
-  amazon_output.title / product_highlights / bullet_1〜bullet_5（theme + body 両方）/ description / rufus_qa_pairs
-  rakuten_output.catchcopy / desc_text / desc_html / search_keywords_field
+- 【最重要】スキーマに定義された全フィールドを空文字にせず必ず埋めること。
+- 【最重要】スキーマは常に**フラットな一階層構造**である。ネストされたオブジェクト（`{"product_profile": {...}}` のような入れ子）は絶対に作らない。全フィールドはトップレベルに配置すること。
+- 【最重要】出力にMarkdownコードフェンス（```json や ``` の三連バッククォート）は絶対に含めない。純粋な JSON のみを返す。
+- 【最重要】ある1つのフィールド値の中に、他のフィールドや別のJSONオブジェクトを文字列として詰め込むことは禁止。各フィールドは自身の担当内容だけを埋めること。
 - 【重要】各フィールドの文字数上限を守り、余分な装飾は削って全フィールドを完成させることを最優先とする。
-  長さより「全フィールドの生成完了」を優先すること。
-- 【重要】JSON文字列値内の改行は\\nでエスケープし、ダブルクォートは\\"でエスケープすること。生の改行・生の"はJSON構造を壊す。
+- 【重要】JSON文字列値内の改行は\\nでエスケープし、ダブルクォートは\\"でエスケープすること。
 
 # 【思考プロセス】※内部で必ず順に実行してから出力
 1. 商品タイプ判定（機能／デザイン／コスパ／総合）と判定理由
@@ -404,6 +402,58 @@ def _safe_json_loads(text: str) -> dict:
         except json.JSONDecodeError as e:
             raise e
     raise json.JSONDecodeError("有効なJSON構造が見つかりません", text, 0)
+
+def _extract_buried_json(text: str) -> dict:
+    """フィールド値内に埋め込まれたJSON（Markdownコードフェンス付き）を救出する。
+
+    Gemini 2.5 系はフラットスキーマ指定を無視して、旧来のネスト構造JSONを
+    1フィールドの値の中に文字列として詰め込んでしまう挙動が確認されている。
+    ゼロ幅スペースや大量の改行でパディングされていることが多いため、
+    それらを除去してから ```json ... ``` を抽出する。
+    """
+    if not isinstance(text, str) or "{" not in text:
+        return None
+    # ゼロ幅文字・制御文字・BOMを除去
+    cleaned = re.sub(r"[\u200b\u200c\u200d\ufeff\u2028\u2029]", "", text)
+    # Markdownコードフェンス内のJSONを探す
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", cleaned, re.DOTALL)
+    if m:
+        candidate = m.group(1)
+    else:
+        # フェンス無しでも {} で囲まれた大きなブロックを探す
+        # 最初の { から最後の } まで
+        first = cleaned.find("{")
+        last = cleaned.rfind("}")
+        if first < 0 or last <= first:
+            return None
+        candidate = cleaned[first: last + 1]
+    try:
+        return json.loads(candidate, strict=False)
+    except json.JSONDecodeError:
+        # 制御文字（生改行等）を除いて再試行
+        cleaned2 = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", candidate)
+        try:
+            return json.loads(cleaned2, strict=False)
+        except json.JSONDecodeError:
+            return None
+
+def _try_recover_from_buried_json(flat_response: dict) -> dict:
+    """フラット出力の各フィールド値を走査し、埋め込みJSONを検出したら返す。"""
+    if not isinstance(flat_response, dict):
+        return None
+    # 長そうな文字列フィールドを優先的に探す
+    candidates = sorted(
+        [(k, v) for k, v in flat_response.items()
+         if isinstance(v, str) and len(v) > 500],
+        key=lambda x: -len(x[1]),
+    )
+    for key, val in candidates:
+        buried = _extract_buried_json(val)
+        if buried and isinstance(buried, dict):
+            # 期待するトップレベルキーが含まれているか
+            if "product_profile" in buried or "amazon_output" in buried:
+                return buried
+    return None
 
 def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                      system_instruction: str, temperature: float = 0.7,
@@ -530,16 +580,16 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 4. カスタマーレビュー: {review}
 
 【指示】
-以下12フィールドを全て埋めた JSON を出力してください。1フィールドも省略・空文字禁止。
+以下12フィールドをトップレベルに持つフラットなJSONを出力してください。
+1フィールドも省略・空文字禁止。ネスト構造禁止。Markdownコードフェンス禁止。
+各フィールドは自身の担当内容のみを埋めること（他のフィールドの情報を混ぜない）。
 
-# プロファイル系
+# 出力すべき12フィールド（すべてトップレベル）
 1. selected_type: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか
-2. type_reason: 判定理由（60〜100文字）
+2. type_reason: 判定理由（60〜100文字）※このフィールドには判定理由のみを書くこと
 3. extracted_usp: 独自の強み・専門情報（100〜150文字）
 4. target_persona: ターゲット像（年齢・状況・購入動機、1〜2文）
 5. key_seo_keywords_csv: 展開SEOキーワード5〜10個をカンマ区切り
-
-# ネガティブレビュー分析系
 6. identified_pain_point: 最大の不安・不満点（1文）
 7. pain_point_severity: 高 / 中 / 低 のいずれか
 8. pattern_a_text: 利点強調パターン（80〜120文字）
@@ -558,10 +608,50 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
                 "raw": stage1.get("raw", ""),
                 "_meta": stage1.get("_meta", {})}
 
-    # フラット→ネスト変換
-    stage1_nested = _unflatten_analysis(stage1)
-    pp = stage1_nested["product_profile"]
-    nra = stage1_nested["negative_review_analysis"]
+    # ---- 埋め込みJSON救出を試行 ----
+    # AI がフラットスキーマを無視して type_reason などにネスト JSON を詰め込む挙動への対処。
+    # 埋め込みJSONに全4ブロックが含まれていれば、Stage 2をスキップして即返す。
+    buried = _try_recover_from_buried_json(stage1)
+    if buried:
+        pp_b = buried.get("product_profile")
+        nra_b = buried.get("negative_review_analysis")
+        amz_b = buried.get("amazon_output")
+        rak_b = buried.get("rakuten_output")
+
+        # key_seo_keywords が str の場合は List に変換
+        if pp_b and isinstance(pp_b.get("key_seo_keywords"), str):
+            pp_b["key_seo_keywords"] = [
+                k.strip() for k in pp_b["key_seo_keywords"].split(",") if k.strip()
+            ]
+
+        # 全4ブロックが揃っていれば Stage 2 をスキップして即返す
+        if pp_b and nra_b and amz_b and rak_b:
+            if progress_cb:
+                progress_cb("✅ 埋め込みJSONを検出。Stage 2をスキップして復元しました。")
+            m1 = stage1.get("_meta", {}) or {}
+            return {
+                "product_profile": pp_b,
+                "negative_review_analysis": nra_b,
+                "amazon_output": amz_b,
+                "rakuten_output": rak_b,
+                "_meta": {
+                    "usage": m1.get("usage"),
+                    "finish_reason": f"stage1={m1.get('finish_reason', 'N/A')} (recovered from buried JSON)",
+                    "model": model_name,
+                    "thinking_budget": thinking_budget,
+                    "recovered": True,
+                },
+                "_raw_stage1": {k: v for k, v in stage1.items() if not k.startswith("_")},
+                "_buried_json_full": buried,
+            }
+        # 部分的にでも救出できたら、それを Stage 1 の結果として採用
+        pp = pp_b or _unflatten_analysis(stage1)["product_profile"]
+        nra = nra_b or _unflatten_analysis(stage1)["negative_review_analysis"]
+    else:
+        # 通常のフラット→ネスト変換
+        stage1_nested = _unflatten_analysis(stage1)
+        pp = stage1_nested["product_profile"]
+        nra = stage1_nested["negative_review_analysis"]
 
     # ---- Stage 2: 成果物（フラット22フィールド） ----
     if progress_cb:
@@ -1012,7 +1102,14 @@ def main():
                     st.session_state["ecom_result"] = res
             else:
                 st.session_state["ecom_result"] = res
-                st.success("生成が完了しました。下部で結果を確認してください。")
+                # 復元モードの明示
+                if res.get("_meta", {}).get("recovered"):
+                    st.success(
+                        "生成が完了しました。"
+                        "（AIレスポンスに埋め込まれた完全JSONを検出したため、Stage 2をスキップして復元しました）"
+                    )
+                else:
+                    st.success("生成が完了しました。下部で結果を確認してください。")
 
                 # 診断情報：短い出力になっていないかここで即警告
                 meta = res.get("_meta", {})
