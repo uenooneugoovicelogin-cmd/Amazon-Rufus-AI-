@@ -295,9 +295,20 @@ def _safe_json_loads(text: str) -> dict:
 
 def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                      system_instruction: str, temperature: float = 0.7,
-                     max_retries: int = 2) -> dict:
+                     max_retries: int = 2,
+                     thinking_budget: int = 1024) -> dict:
+    """Gemini API を呼び出す。
+
+    Gemini 2.5 Pro は既定で「思考モード」が有効で、思考が出力トークン予算を大量に消費する。
+    - thinking_budget を明示することで、思考は残しつつ本文出力の余裕を確保する
+    - max_output_tokens は思考＋本文の合計上限のため十分大きくする
+    - 診断のため usage_metadata と finish_reason を戻り値に含める
+    """
     last_err = None
     last_raw = ""
+    last_usage = None
+    last_finish_reason = None
+
     for attempt in range(max_retries + 1):
         try:
             genai.configure(api_key=api_key)
@@ -305,21 +316,59 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                 model_name=model_name,
                 system_instruction=system_instruction,
             )
-            response = model.generate_content(
-                user_prompt,
-                generation_config={
-                    "response_mime_type": "application/json",
-                    "response_schema": EcomUpdateSchema,
-                    "temperature": temperature,
-                    "top_p": 0.95,
-                    "max_output_tokens": 16384,  # 8192だと日本語長文で切れることがあるため増量
-                },
-            )
+
+            gen_config = {
+                "response_mime_type": "application/json",
+                "response_schema": EcomUpdateSchema,
+                "temperature": temperature,
+                "top_p": 0.95,
+                "max_output_tokens": 32768,  # 思考トークン+本文の合計。Gemini 2.5系は思考が数千を消費するため大きめに
+            }
+            # Gemini 2.5系のみ thinking_budget を試みに設定（SDK未対応版のためのフォールバック付き）
+            supports_thinking = "2.5" in model_name
+            if supports_thinking:
+                gen_config["thinking_config"] = {"thinking_budget": thinking_budget}
+
+            try:
+                response = model.generate_content(user_prompt, generation_config=gen_config)
+            except Exception as gen_err:
+                # SDKが thinking_config を認識しない場合は除去して再試行
+                msg = str(gen_err).lower()
+                if "thinking" in msg or "unknown field" in msg or "unexpected keyword" in msg:
+                    gen_config.pop("thinking_config", None)
+                    response = model.generate_content(user_prompt, generation_config=gen_config)
+                else:
+                    raise
+
+            # 診断情報を取得（例外は握りつぶす）
+            try:
+                um = response.usage_metadata
+                last_usage = {
+                    "prompt_tokens": getattr(um, "prompt_token_count", None),
+                    "output_tokens": getattr(um, "candidates_token_count", None),
+                    "thoughts_tokens": getattr(um, "thoughts_token_count", None),
+                    "total_tokens": getattr(um, "total_token_count", None),
+                }
+            except Exception:
+                pass
+            try:
+                last_finish_reason = str(response.candidates[0].finish_reason)
+            except Exception:
+                pass
+
             raw = _strip_code_fences(response.text)
             last_raw = raw
-            return _safe_json_loads(raw)
+            result = _safe_json_loads(raw)
+            # 診断メタ情報を結果に付加
+            result["_meta"] = {
+                "usage": last_usage,
+                "finish_reason": last_finish_reason,
+                "model": model_name,
+                "thinking_budget": thinking_budget if supports_thinking else None,
+            }
+            return result
+
         except json.JSONDecodeError as e:
-            # 失敗位置周辺のスニペットも添えて再現しやすくする
             pos = getattr(e, "pos", 0) or 0
             snippet_start = max(0, pos - 60)
             snippet_end = min(len(last_raw), pos + 60)
@@ -330,7 +379,12 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
             last_err = f"{type(e).__name__}: {e}"
         if attempt < max_retries:
             time.sleep(1.2)
-    return {"error": last_err or "不明なエラー", "raw": last_raw[:2000] if last_raw else ""}
+
+    return {
+        "error": last_err or "不明なエラー",
+        "raw": last_raw[:2000] if last_raw else "",
+        "_meta": {"usage": last_usage, "finish_reason": last_finish_reason, "model": model_name},
+    }
 
 def _char_badge(text: str, target: tuple, hard_max: int = None) -> str:
     """文字数バッジのHTMLを返す。目標範囲内=OK、範囲外=WARN、ハード超過=NG。"""
@@ -521,6 +575,15 @@ def main():
             index=0,
         )
         temperature = st.slider("Temperature（0.3〜0.5推奨）", 0.0, 1.0, 0.5, 0.05)
+        thinking_budget = st.slider(
+            "思考予算 Thinking Budget（Gemini 2.5系のみ）",
+            min_value=0, max_value=8192, value=1024, step=256,
+            help=(
+                "Gemini 2.5系は既定で大量の思考トークンを消費し、本文出力が短くなる原因になります。"
+                "1024程度に抑えると本文の生成量が回復します。"
+                "0にすると思考を最小化しますが、複雑な推論品質は下がります。"
+            ),
+        )
 
         st.divider()
         st.header("🎨 リライト基本設定")
@@ -569,7 +632,11 @@ def main():
             with st.spinner("プロのECコンサルタントAIが思考中...（規約・薬機法・E-E-A-T・AI検索対策を同時実行）"):
                 sys_inst = build_system_instruction(TONE_MAPPING[tone])
                 user_prompt = _build_user_prompt(genre, tone, c_seo, c_base, c_usp, c_spec, c_review)
-                res = _call_gemini_api(api_key, model_name, user_prompt, sys_inst, temperature)
+                res = _call_gemini_api(
+                    api_key, model_name, user_prompt, sys_inst,
+                    temperature=temperature,
+                    thinking_budget=thinking_budget,
+                )
 
                 if "error" in res:
                     st.error(f"APIエラー：{res['error']}")
@@ -580,6 +647,24 @@ def main():
                 else:
                     st.session_state["ecom_result"] = res
                     st.success("生成が完了しました。下部で結果を確認してください。")
+
+                    # 診断情報：短い出力になっていないかここで即警告
+                    meta = res.get("_meta", {})
+                    usage = meta.get("usage") or {}
+                    fr = meta.get("finish_reason") or ""
+                    thoughts = usage.get("thoughts_tokens") or 0
+                    output = usage.get("output_tokens") or 0
+                    if "MAX_TOKENS" in fr:
+                        st.warning(
+                            "⚠️ 出力が最大トークン数に達して切り詰められました。"
+                            "サイドバーの『思考予算』を下げるか、モデルを Flash 系に切り替えてください。"
+                        )
+                    elif thoughts and output and thoughts > output * 3:
+                        st.warning(
+                            f"⚠️ 思考トークンが本文の3倍以上を消費しています "
+                            f"(思考 {thoughts} / 本文 {output})。"
+                            "サイドバーの『思考予算』を下げると本文が長くなります。"
+                        )
 
     # ---- 結果表示 ----
     if "ecom_result" in st.session_state:
@@ -595,6 +680,24 @@ def main():
             render_rakuten_tab(res)
 
         st.divider()
+
+        # 診断パネル
+        meta = res.get("_meta") or {}
+        usage = meta.get("usage") or {}
+        if usage:
+            with st.expander("📊 生成の診断情報（トークン使用量・終了理由）"):
+                cols = st.columns(4)
+                cols[0].metric("入力トークン", usage.get("prompt_tokens") or "N/A")
+                cols[1].metric("本文出力", usage.get("output_tokens") or "N/A")
+                cols[2].metric("思考消費", usage.get("thoughts_tokens") or "N/A")
+                cols[3].metric("合計", usage.get("total_tokens") or "N/A")
+                st.caption(
+                    f"モデル: {meta.get('model', 'N/A')}　"
+                    f"終了理由: {meta.get('finish_reason', 'N/A')}　"
+                    f"思考予算: {meta.get('thinking_budget', 'N/A')}"
+                )
+                st.caption("『本文出力』が2000未満の場合、思考予算を下げると本文が長くなります。")
+
         with st.expander("🧾 生JSON（デバッグ用）"):
             st.json(res)
 
