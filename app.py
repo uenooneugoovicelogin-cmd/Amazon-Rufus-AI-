@@ -265,10 +265,39 @@ def _strip_code_fences(text: str) -> str:
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
 
+def _safe_json_loads(text: str) -> dict:
+    """堅牢なJSON解析。Geminiが生成する制御文字混入・末尾切れなどに対応。
+
+    段階的に緩めていく：
+    1. strict=False で制御文字（生改行等）を許容
+    2. 危険な制御文字を除去して再試行
+    3. 末尾が切れている場合は最終の '}' までを切り出して再試行
+    """
+    # 1st: strict=False（生改行OK）
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # 2nd: 制御文字（Tab/改行以外のC0）を除去
+    cleaned = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+    try:
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError:
+        pass
+    # 3rd: 末尾切れ対策（最終 '}' までで切り取り）
+    last_brace = cleaned.rfind("}")
+    if last_brace > 0:
+        try:
+            return json.loads(cleaned[: last_brace + 1], strict=False)
+        except json.JSONDecodeError as e:
+            raise e
+    raise json.JSONDecodeError("有効なJSON構造が見つかりません", text, 0)
+
 def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                      system_instruction: str, temperature: float = 0.7,
                      max_retries: int = 2) -> dict:
     last_err = None
+    last_raw = ""
     for attempt in range(max_retries + 1):
         try:
             genai.configure(api_key=api_key)
@@ -283,18 +312,25 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
                     "response_schema": EcomUpdateSchema,
                     "temperature": temperature,
                     "top_p": 0.95,
-                    "max_output_tokens": 8192,
+                    "max_output_tokens": 16384,  # 8192だと日本語長文で切れることがあるため増量
                 },
             )
             raw = _strip_code_fences(response.text)
-            return json.loads(raw)
+            last_raw = raw
+            return _safe_json_loads(raw)
         except json.JSONDecodeError as e:
-            last_err = f"JSON解析エラー: {e}"
+            # 失敗位置周辺のスニペットも添えて再現しやすくする
+            pos = getattr(e, "pos", 0) or 0
+            snippet_start = max(0, pos - 60)
+            snippet_end = min(len(last_raw), pos + 60)
+            snippet = last_raw[snippet_start:snippet_end].replace("\n", "\\n")
+            last_err = (f"JSON解析エラー: {e}\n"
+                        f"周辺文字列: ...{snippet}...")
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
         if attempt < max_retries:
             time.sleep(1.2)
-    return {"error": last_err or "不明なエラー"}
+    return {"error": last_err or "不明なエラー", "raw": last_raw[:2000] if last_raw else ""}
 
 def _char_badge(text: str, target: tuple, hard_max: int = None) -> str:
     """文字数バッジのHTMLを返す。目標範囲内=OK、範囲外=WARN、ハード超過=NG。"""
@@ -538,6 +574,9 @@ def main():
                 if "error" in res:
                     st.error(f"APIエラー：{res['error']}")
                     st.info("モデル名を切り替える／temperature を下げる／入力を短くする、などをお試しください。")
+                    if res.get("raw"):
+                        with st.expander("🔍 AIの生レスポンス（先頭2000文字・デバッグ用）"):
+                            st.code(res["raw"], language="json")
                 else:
                     st.session_state["ecom_result"] = res
                     st.success("生成が完了しました。下部で結果を確認してください。")
