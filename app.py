@@ -185,18 +185,18 @@ class ContentSchema(BaseModel):
 class AnalysisSchemaFlat(BaseModel):
     # product_profile
     selected_type: str = Field(description="商品タイプ: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか")
-    type_reason: str = Field(description="判定理由を60〜100文字で")
-    extracted_usp: str = Field(description="独自の強み・専門情報を100〜150文字で")
-    target_persona: str = Field(description="主要ターゲット像（年齢・状況・購入動機）1〜2文")
-    key_seo_keywords_csv: str = Field(description="展開SEOキーワード5〜10個をカンマ区切りで（例: 介護用クッション,体圧分散,通気性）")
+    type_reason: str = Field(description="判定理由。1〜2文で簡潔に。")
+    extracted_usp: str = Field(description="独自の強み・専門情報。2〜3文で。")
+    target_persona: str = Field(description="主要ターゲット像（年齢・状況・購入動機）。1〜2文で。")
+    key_seo_keywords_csv: str = Field(description="展開SEOキーワードをカンマ区切りで（例: 介護用クッション,体圧分散,通気性）")
     # negative_review_analysis
-    identified_pain_point: str = Field(description="最大の不安・不満点を1文で")
+    identified_pain_point: str = Field(description="最大の不安・不満点。1文で。")
     pain_point_severity: str = Field(description="深刻度: 高 / 中 / 低 のいずれか")
-    pattern_a_text: str = Field(description="パターンA（利点強調）80〜120文字")
-    pattern_b_text: str = Field(description="パターンB（誠実開示）80〜120文字")
-    pattern_c_text: str = Field(description="パターンC（メリット変換）80〜120文字")
+    pattern_a_text: str = Field(description="パターンA（利点強調）の文章。")
+    pattern_b_text: str = Field(description="パターンB（誠実開示）の文章。")
+    pattern_c_text: str = Field(description="パターンC（メリット変換）の文章。")
     recommended_pattern: str = Field(description="推奨パターン: A / B / C のいずれか1文字")
-    ai_recommendation: str = Field(description="推奨理由100〜150文字")
+    ai_recommendation: str = Field(description="推奨理由。2〜3文で。")
 
 class ContentSchemaFlat(BaseModel):
     # Amazon
@@ -285,7 +285,16 @@ def build_system_instruction(tone_rule: str) -> str:
 - 【最重要】スキーマは常に**フラットな一階層構造**である。ネストされたオブジェクト（`{{"product_profile": {{...}}}}` のような入れ子）は絶対に作らない。全フィールドはトップレベルに配置すること。
 - 【最重要】出力にMarkdownコードフェンス（```json や ``` の三連バッククォート）は絶対に含めない。純粋な JSON のみを返す。
 - 【最重要】ある1つのフィールド値の中に、他のフィールドや別のJSONオブジェクトを文字列として詰め込むことは禁止。各フィールドは自身の担当内容だけを埋めること。
-- 【最重要】文字列値の中に無意味な改行（\\n）の繰り返しや、改ページ文字（\\f）などの装飾文字を含めないこと。実質的な内容だけを書くこと。
+- 【最重要】文字列値の中に以下の装飾・パディング文字を絶対に含めないこと。
+  検出された場合、そのフィールドは無効として扱う：
+  ・ゼロ幅スペース（U+200B）、ゼロ幅ノーブレークスペース（U+FEFF）
+  ・ゼロ幅ジョイナ（U+200C, U+200D）
+  ・行区切り（U+2028）、段落区切り（U+2029）
+  ・フォームフィード（\\f）、垂直タブ（\\v）
+  ・3個以上の連続改行（\\n\\n\\n以上）
+- 【最重要】文字数の下限・上限は「目安」であり、実質的な内容を書き切ったら
+  それ以上の文字数のために文章を水増しせず、その時点でフィールドを完成させて次のフィールドへ移ること。
+  内容が短くても構わない。長さを稼ぐための無意味な繰り返し・記号列は禁止。
 - 【重要】JSON文字列値内の改行は\\nでエスケープし、ダブルクォートは\\"でエスケープすること。
 
 # 【思考プロセス】※内部で必ず順に実行してから出力
@@ -391,6 +400,39 @@ def _strip_code_fences(text: str) -> str:
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
+
+def _sanitize_ai_padding(text: str) -> str:
+    """Geminiが挿入する装飾パディング（ゼロ幅スペース・過剰改行・フォームフィード）を除去。
+
+    Gemini 2.5 系はスキーマの min-length 制約を満たそうとして、実質内容の後に
+    以下のパターンを大量に挿入することがある：
+    - \\u200B (ゼロ幅スペース)、\\u200C, \\u200D, \\uFEFF (BOM)
+    - \\u2028, \\u2029 (行区切り・段落区切り)
+    - \\f (フォームフィード / 改ページ)
+    - 3個以上の連続改行
+
+    これらは全て「AIが埋めるべき情報を持たなかった証拠」であり、実質内容ではない。
+    """
+    if not isinstance(text, str):
+        return text
+    # ゼロ幅・不可視文字を全除去
+    text = re.sub(r"[\u200B\u200C\u200D\uFEFF\u2028\u2029]", "", text)
+    # フォームフィード・垂直タブを除去
+    text = text.replace("\f", "").replace("\v", "")
+    # 3個以上の連続改行を2個に圧縮
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # 末尾の空白・改行を除去
+    return text.strip()
+
+def _sanitize_response_dict(d: dict) -> dict:
+    """レスポンス辞書内の全文字列値をサニタイズ。ネストしたdict/listにも対応。"""
+    if isinstance(d, dict):
+        return {k: _sanitize_response_dict(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_sanitize_response_dict(x) for x in d]
+    if isinstance(d, str):
+        return _sanitize_ai_padding(d)
+    return d
 
 def _safe_json_loads(text: str) -> dict:
     """堅牢なJSON解析。Geminiが生成する制御文字混入・末尾切れなどに対応。
@@ -540,6 +582,8 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
             raw = _strip_code_fences(response.text)
             last_raw = raw
             result = _safe_json_loads(raw)
+            # Geminiが挿入する装飾パディング（ゼロ幅スペース等）を全文字列値から除去
+            result = _sanitize_response_dict(result)
             # 診断メタ情報を結果に付加
             result["_meta"] = {
                 "usage": last_usage,
@@ -598,8 +642,13 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 
 【指示】
 以下の**JSON出力例**と同じ構造で、12フィールドすべてをトップレベルに埋めたJSONを返してください。
-Markdownコードフェンス禁止・ネスト構造禁止・メタコメント禁止・改行パディング禁止。
+Markdownコードフェンス禁止・ネスト構造禁止・メタコメント禁止。
 各フィールドは実質的な内容だけを書くこと（「調整しました」等の作業コメントを含めない）。
+
+【重要】文字数の目安に到達しなくても、実質的な内容を書き切ったらその時点で
+そのフィールドを完成させ、次のフィールドの生成に必ず進むこと。
+長さを稼ぐための無意味な繰り返しや、ゼロ幅スペース・改行の水増しは絶対に禁止。
+短くても内容がある方が、水増しした長文より遥かに価値がある。
 
 【JSON出力例（この構造を厳密に守る。内容は実際の商品に合わせて書き換える）】
 {{
@@ -618,6 +667,7 @@ Markdownコードフェンス禁止・ネスト構造禁止・メタコメント
 }}
 
 上記の**構造**を厳密に守り、内容は入力された商品情報に基づいて書き起こしてください。
+生成順序: 1→2→3→...→12 と順に全フィールドを埋めきってから応答を終了すること。
 """
     stage1 = _call_gemini_api(
         api_key, model_name, stage1_prompt, system_instruction,
