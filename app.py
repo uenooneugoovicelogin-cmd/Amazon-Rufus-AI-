@@ -96,6 +96,10 @@ AVAILABLE_MODELS = [
     "gemini-1.5-flash",      # レガシー
 ]
 
+# Stage 0: レビュー消化（大量レビューを処理する場合の追加ステージ）
+REVIEW_DIGEST_THRESHOLD = 3000       # この文字数を超えたらStage 0を起動
+REVIEW_DIGEST_MODEL = "gemini-2.5-flash"  # Stage 0はコスト効率でFlashを使用
+
 # Amazon箇条書きの推奨テーマ枠（5本を必ずここから選ばせる）
 AMAZON_BULLET_THEMES = [
     "主要ベネフィット",
@@ -240,6 +244,20 @@ class AnalysisSchemaFlat(BaseModel):
     pattern_c_text: str = Field(description="パターンC（メリット変換）の文章。")
     recommended_pattern: str = Field(description="推奨パターン: A / B / C のいずれか1文字")
     ai_recommendation: str = Field(description="推奨理由。2〜3文で。")
+
+# Stage 0: 大量レビューを Flash モデルでダイジェスト化するためのスキーマ
+class ReviewDigestSchema(BaseModel):
+    """Stage 0: 大量レビューを消化して構造化ダイジェストを作成"""
+    top_negative_themes: str = Field(description="頻出ネガティブテーマをカンマ区切りで3〜5個。例: サイズ違い,汚れやすい,梱包が雑")
+    top_positive_themes: str = Field(description="頻出ポジティブテーマをカンマ区切りで3〜5個。例: しっかりした作り,可愛い,コスパ良い")
+    main_pain_point: str = Field(description="最も頻出する不満・不安を1文で。ネガティブレビューの本質")
+    representative_negative_quote: str = Field(description="代表的なネガティブレビュー引用（短く、原文の言い回しを保持）")
+    representative_positive_quote: str = Field(description="代表的なポジティブレビュー引用（短く、原文の言い回しを保持）")
+    emerging_keywords: str = Field(description="レビューに頻出するが商品説明にはあまり出てこない語句をカンマ区切りで5〜10個。SEO発掘対象。")
+    usage_scenes: str = Field(description="レビューから読み取れる主な使用シーンをカンマ区切りで3〜5個")
+    target_users: str = Field(description="レビューから読み取れる主な購入者層をカンマ区切りで2〜4個")
+    overall_sentiment: str = Field(description="全体的な評価傾向。ポジ多め/中立/ネガ多め のいずれか + 一言")
+    review_count_processed: str = Field(description="実際に読み込んだレビューの推定件数（例: 250件）")
 
 class ContentSchemaFlat(BaseModel):
     # Amazon
@@ -815,11 +833,26 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
             # 診断情報を取得（例外は握りつぶす）
             try:
                 um = response.usage_metadata
+                prompt_t = getattr(um, "prompt_token_count", None)
+                output_t = getattr(um, "candidates_token_count", None)
+                total_t = getattr(um, "total_token_count", None)
+                # 思考トークン: SDKバージョンで属性名が異なるため複数試す
+                thoughts_t = (
+                    getattr(um, "thoughts_token_count", None)
+                    or getattr(um, "thinking_token_count", None)
+                    or getattr(um, "reasoning_token_count", None)
+                )
+                # 属性が見つからない場合、合計から逆算する（Gemini APIの設計上必ず成立）
+                # total = prompt + output + thoughts なので thoughts = total - prompt - output
+                if thoughts_t is None and total_t and prompt_t is not None and output_t is not None:
+                    diff = total_t - prompt_t - output_t
+                    # マイナスやゼロは意味のある「思考0」として扱う
+                    thoughts_t = max(0, diff)
                 last_usage = {
-                    "prompt_tokens": getattr(um, "prompt_token_count", None),
-                    "output_tokens": getattr(um, "candidates_token_count", None),
-                    "thoughts_tokens": getattr(um, "thoughts_token_count", None),
-                    "total_tokens": getattr(um, "total_token_count", None),
+                    "prompt_tokens": prompt_t,
+                    "output_tokens": output_t,
+                    "thoughts_tokens": thoughts_t,
+                    "total_tokens": total_t,
                 }
             except Exception:
                 pass
@@ -866,6 +899,90 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
         "_meta": {"usage": last_usage, "finish_reason": last_finish_reason, "model": model_name},
     }
 
+def _run_stage0_review_digest(api_key: str, review: str, temperature: float = 0.4,
+                                progress_cb=None) -> tuple:
+    """Stage 0: 大量のレビューを Flash モデルで構造化ダイジェスト化する。
+
+    Stage 1（Pro モデル）がレビュー全文を読むと以下の問題が起きる：
+    - 注意力の希釈で本質的なペインポイントを見逃す
+    - 入力量に負荷がかかりフィールド欠落や反復ループが発生
+    - コストが跳ね上がる（プロは Flash の 12.5 倍高い）
+
+    そこで先に安価な Flash モデルでレビューを消化し、
+    構造化されたダイジェスト（200〜300文字）を作成する。
+    Stage 1/2 にはこのダイジェストを渡すことで、注意力を集中させる。
+
+    Returns:
+        (digest_text, digest_dict): ダイジェストのテキスト形式と生辞書
+        レビューが短い場合や失敗時は (元のreview, None) を返す。
+    """
+    if not review or len(review) <= REVIEW_DIGEST_THRESHOLD:
+        return review, None
+
+    if progress_cb:
+        progress_cb(f"Stage 0/3: 長文レビュー({len(review)}文字)をFlashモデルでダイジェスト化中...")
+
+    digest_prompt = f"""以下は商品のカスタマーレビュー原文です。ダイジェスト化して構造化JSONで返してください。
+
+【レビュー原文（{len(review)}文字）】
+{review}
+
+【指示】
+10フィールド全てを埋めた JSON を返してください。全体を通読して頻出パターンを抽出すること。
+- 極端に少数の意見や1件だけの不満に引きずられず、複数レビューで共通するテーマを優先
+- 引用は原文の言い回しを保持（勝手に言い換えない）
+- emerging_keywords はレビュー独特の用語・略語・シーン語を発掘する対象
+"""
+
+    digest_result = _call_gemini_api(
+        api_key=api_key,
+        model_name=REVIEW_DIGEST_MODEL,
+        user_prompt=digest_prompt,
+        system_instruction="あなたはカスタマーレビュー分析のエキスパートです。大量のレビューから本質的なインサイトを客観的に抽出します。個人的な感想や創作は絶対にせず、レビュー原文に忠実な要約のみを行います。",
+        temperature=temperature,
+        thinking_budget=512,  # Flash + シンプルタスクなので思考予算は最小限
+        max_retries=1,
+        response_schema=ReviewDigestSchema,
+    )
+
+    if "error" in digest_result:
+        if progress_cb:
+            progress_cb(f"Stage 0 エラー: {digest_result.get('error', '不明')[:80]}。元レビューをそのまま使用します。")
+        return review, None
+
+    # ダイジェストをテキスト化して Stage 1/2 に渡す形にする
+    def _get(k):
+        v = digest_result.get(k, "") or ""
+        return v.strip() if isinstance(v, str) else str(v)
+
+    digest_text = f"""【レビューダイジェスト（原文{len(review)}文字を要約）】
+処理レビュー件数: {_get('review_count_processed')}
+全体評価傾向: {_get('overall_sentiment')}
+
+■ 最頻出の不満: {_get('main_pain_point')}
+■ ネガティブテーマ（頻出順）: {_get('top_negative_themes')}
+■ 代表的なネガレビュー引用: 「{_get('representative_negative_quote')}」
+
+■ ポジティブテーマ（頻出順）: {_get('top_positive_themes')}
+■ 代表的なポジレビュー引用: 「{_get('representative_positive_quote')}」
+
+■ レビューで頻出のキーワード: {_get('emerging_keywords')}
+■ 主な使用シーン: {_get('usage_scenes')}
+■ 主な購入者層: {_get('target_users')}
+"""
+
+    if progress_cb:
+        progress_cb(f"✅ Stage 0 完了: {len(review)}文字 → {len(digest_text)}文字に集約")
+
+    # digest_dict にはメタ情報も含める
+    digest_dict = {k: v for k, v in digest_result.items() if not k.startswith("_")}
+    digest_dict["_original_review_length"] = len(review)
+    digest_dict["_digest_text_length"] = len(digest_text)
+    digest_dict["_stage0_meta"] = digest_result.get("_meta", {})
+
+    return digest_text, digest_dict
+
+
 def _call_gemini_two_stage(api_key: str, model_name: str,
                             system_instruction: str,
                             genre: str, tone: str, seo_kw: str,
@@ -873,18 +990,31 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
                             current_title: str = "",
                             temperature: float = 0.5,
                             thinking_budget: int = 2048,
+                            use_stage0: bool = True,
                             progress_cb=None) -> dict:
-    """2段階生成: 分析→成果物 に分けてフラットスキーマで確実に生成する。
+    """2段階（レビュー消化を含む場合3段階）生成: 分析→成果物 に分けてフラットスキーマで確実に生成する。
 
     Geminiの構造化出力はList[str]やネストクラスでフィールド欠落が起きやすいため、
     各段とも全フィールドをstrに平坦化したスキーマで呼び出す。
     パース後に元のネスト構造へ組み直して返す。
 
     current_title: 現在の商品名（あれば）。整合性維持のためStage 1/2の文脈に渡す。
+    use_stage0: レビューが長い場合にStage 0（Flash モデルでの要約）を実行するか
     """
+    # ---- Stage 0: レビューが長い場合の消化（Flash モデルで安価に処理） ----
+    review_digest_dict = None
+    if use_stage0:
+        review, review_digest_dict = _run_stage0_review_digest(
+            api_key=api_key,
+            review=review,
+            temperature=temperature,
+            progress_cb=progress_cb,
+        )
+
     # ---- Stage 1: 分析（フラット12フィールド） ----
     if progress_cb:
-        progress_cb("Stage 1/2: 商品プロファイリング＆レビュー分析中...")
+        stage_prefix = "Stage 2/3" if review_digest_dict else "Stage 1/2"
+        progress_cb(f"{stage_prefix}: 商品プロファイリング＆レビュー分析中...")
 
     stage1_prompt = f"""
 【商品情報】
@@ -1042,7 +1172,8 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
 
     # ---- Stage 2: 成果物（フラット22フィールド） ----
     if progress_cb:
-        progress_cb("Stage 2/2: Amazon＆楽天テキスト生成中...")
+        stage_prefix = "Stage 3/3" if review_digest_dict else "Stage 2/2"
+        progress_cb(f"{stage_prefix}: Amazon＆楽天テキスト生成中...")
 
     recommended = str(nra.get("recommended_pattern", "b")).lower()
     recommended_text = nra.get(f"pattern_{recommended}_text", "")
@@ -1148,10 +1279,12 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
             "thinking_budget": thinking_budget,
             "two_stage": True,
             "flat_schema": True,
+            "stage0_used": review_digest_dict is not None,
         },
         # デバッグ用: 生のフラットレスポンスを保持
         "_raw_stage1": {k: v for k, v in stage1.items() if not k.startswith("_")},
         "_raw_stage2": {k: v for k, v in stage2.items() if not k.startswith("_")},
+        "_review_digest": review_digest_dict,  # Stage 0の結果（UIで表示用）
     }
 
 def _char_badge(text: str, target: tuple, hard_max: int = None) -> str:
@@ -1785,6 +1918,16 @@ def main():
                 "OFF: 1回で全部生成します（速いが複雑スキーマで欠落しやすい）。"
             ),
         )
+        use_stage0 = st.checkbox(
+            "🆕 Stage 0: 長文レビュー自動要約（推奨）",
+            value=True,
+            help=(
+                f"ON: レビューが{REVIEW_DIGEST_THRESHOLD}文字を超える場合、"
+                f"先に安価な Flash モデルで構造化ダイジェスト化してから Stage 1/2 に渡します。"
+                "長文レビューでのフィールド欠落バグを防ぎ、コストも下がります。"
+                "OFF: レビュー原文をそのまま Stage 1 に渡します（30〜100件程度のレビュー向け）。"
+            ),
+        )
 
         st.divider()
         st.header("🎨 リライト基本設定")
@@ -1848,7 +1991,7 @@ def main():
                 def _progress(msg):
                     status_placeholder.info(f"🔄 {msg}")
 
-                _progress("Stage 1/2: 商品プロファイリング＆レビュー分析中...")
+                _progress("初期化中...")
                 res = _call_gemini_two_stage(
                     api_key=api_key,
                     model_name=model_name,
@@ -1858,6 +2001,7 @@ def main():
                     current_title=c_current_title,
                     temperature=temperature,
                     thinking_budget=thinking_budget,
+                    use_stage0=use_stage0,
                     progress_cb=_progress,
                 )
                 status_placeholder.empty()
@@ -1923,6 +2067,35 @@ def main():
     # ---- 結果表示 ----
     if "ecom_result" in st.session_state:
         res = st.session_state["ecom_result"]
+
+        # Stage 0が動いていた場合、ダイジェストを表示
+        digest = res.get("_review_digest")
+        if digest:
+            with st.expander(
+                f"📚 Stage 0 レビューダイジェスト（原文 {digest.get('_original_review_length', 0):,}文字 → 集約 {digest.get('_digest_text_length', 0):,}文字）",
+                expanded=False,
+            ):
+                st.caption(
+                    "長文レビューを Gemini 2.5 Flash で構造化ダイジェスト化した結果です。"
+                    "Stage 1/2 にはこの要約が渡され、AI が本質的なインサイトに集中できるようになっています。"
+                )
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("##### 🔻 ネガティブ側")
+                    st.markdown(f"**最頻出の不満**：{digest.get('main_pain_point', '')}")
+                    st.markdown(f"**ネガティブテーマ**：{digest.get('top_negative_themes', '')}")
+                    st.markdown(f"**代表引用**：「{digest.get('representative_negative_quote', '')}」")
+                with c2:
+                    st.markdown("##### 🔺 ポジティブ側")
+                    st.markdown(f"**全体傾向**：{digest.get('overall_sentiment', '')}")
+                    st.markdown(f"**ポジティブテーマ**：{digest.get('top_positive_themes', '')}")
+                    st.markdown(f"**代表引用**：「{digest.get('representative_positive_quote', '')}」")
+                st.markdown("---")
+                st.markdown(f"**📌 レビュー頻出キーワード**：`{digest.get('emerging_keywords', '')}`")
+                st.markdown(f"**🎯 主な使用シーン**：{digest.get('usage_scenes', '')}")
+                st.markdown(f"**👥 主な購入者層**：{digest.get('target_users', '')}")
+                st.markdown(f"**📊 処理レビュー件数**：{digest.get('review_count_processed', '不明')}")
+
         render_profile_and_reviews(res)
         st.markdown("---")
         tab_amz, tab_rak = st.tabs(
