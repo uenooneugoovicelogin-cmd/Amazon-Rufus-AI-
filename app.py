@@ -201,7 +201,7 @@ class AnalysisSchemaFlat(BaseModel):
 class ContentSchemaFlat(BaseModel):
     # Amazon
     amz_title: str = Field(description="Amazon商品名。50〜75文字絶対厳守。ブランド→主要KW→スペック→用途")
-    amz_product_highlights: str = Field(description="商品ハイライト。カンマ区切りキーワード7〜15個。例: 介護用クッション,体圧分散,低反発ウレタン,通気メッシュ,洗える")
+    amz_product_highlights: str = Field(description="商品ハイライト。カンマ区切りキーワード7〜15個。【重複禁止ルール厳守】amz_titleに含まれるキーワードは絶対に含めない。商品名で使わなかった検索語（同義語・関連語・別カテゴリ語）だけを配置し、両フィールドで検索カバレッジを最大化する。例: 介護用クッション,体圧分散,低反発ウレタン,通気メッシュ,洗える")
     amz_bullet_1_theme: str = Field(description="箇条書き1テーマ: 主要ベネフィット/独自技術・素材/使用シーン・対象者/品質・安全性・保証/使い方・お手入れ/サイズ・スペック/安全上の注意 のいずれか")
     amz_bullet_1_body: str = Field(description="箇条書き1本文80〜120文字")
     amz_bullet_2_theme: str = Field(description="箇条書き2テーマ（1と重複禁止）")
@@ -339,6 +339,23 @@ def build_system_instruction(tone_rule: str) -> str:
   ・全角スペース／改行／絵文字／記号（!?★☆等）禁止
   ・「最高」「日本一」「絶対」等の景表法違反表現禁止
   ・薬機法違反の効果効能表現禁止
+
+# 【★最重要 Amazon 商品名(amz_title)と商品ハイライト(amz_product_highlights)の重複禁止ルール】
+- 商品名と商品ハイライトは Amazon 検索アルゴリズムでそれぞれ独立してインデックスされるため、
+  両者で同じキーワードを使うことはSEO上「インデックス枠の無駄遣い」となり、
+  検索カバレッジを大きく損なう最大のアンチパターンである。
+- ルール: 商品名で使ったキーワードは商品ハイライトに絶対に含めない。逆も同様。
+- 具体例:
+  ・NG: 商品名「ぬいポーチ 15cm 2体収納 PUレザー」 かつ ハイライト「ぬいポーチ,15cm,2体収納,PUレザー」
+    → 完全重複でSEO無効
+  ・OK: 商品名「ぬいポーチ 15cm 2体収納 PUレザー」 かつ ハイライト「痛バッグ,ぬい活,ディスプレイケース,自立,見せる収納」
+    → 補完関係で検索カバレッジ最大化
+- 生成手順（厳守）:
+  Step1. amz_title を先に確定させる（主要検索KWをここに配置）
+  Step2. amz_title の各キーワードをリストアップし記憶する
+  Step3. amz_product_highlights には Step2 のリストに**含まれないキーワードだけ**を配置する
+         （同義語・関連語・別カテゴリの検索語・別の使用シーン語などで補完する）
+- 表記ゆれも重複扱いとする（例: 商品名に「15cm」 ハイライトに「15センチ」も禁止）。
 
 # 【法律・規約コンプライアンス（違反ゼロ）】
 - 薬機法: 治る/防ぐ/効く/改善する/予防する 等の医療的効果効能表現は絶対禁止。
@@ -748,6 +765,15 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
 # Amazon系
 1. amz_title: 商品名（50〜75文字、絶対上限75文字）
 2. amz_product_highlights: 商品ハイライト（カンマ区切り7〜15個）
+   ★★★ 最重要ルール ★★★
+   amz_title に既に含まれているキーワードは絶対に含めないこと。
+   両フィールドの検索カバレッジを最大化するため、商品名で使わなかった
+   別カテゴリの検索語（同義語・関連語・別シーン語・別ペルソナ語など）だけを配置する。
+   生成手順: (1)先にamz_titleを完成させる → (2)titleの各語をリストアップ →
+   (3)そのリストに含まれない語だけでhighlightsを組み立てる。
+   例: title「iikuru ぬいポーチ 15cm 2体収納 PUレザー ショルダーバッグ」
+       → highlightsで使ってよい語: 痛バッグ, ぬい活, ディスプレイケース, 自立, 見せる収納, ポケモンfit対応 等
+       → highlightsで禁止の語: ぬいポーチ, 15cm, 2体収納, PUレザー, ショルダーバッグ（全てtitleに既出）
 3-12. amz_bullet_1_theme, amz_bullet_1_body, ..., amz_bullet_5_theme, amz_bullet_5_body:
      箇条書き5本のテーマと本文。テーマは重複禁止。本文は各80〜120文字。
 13. amz_description: 商品説明文（500〜800文字）
@@ -830,6 +856,51 @@ def _char_badge_count(items: list, target: tuple) -> str:
     else:
         cls, label = "badge-warn", f"{n}個（目標 {lo}〜{hi}個）"
     return f'<span class="count-badge {cls}">{label}</span>'
+
+def _normalize_kw(s: str) -> str:
+    """比較用のキーワード正規化。全角半角統一・大文字小文字統一・空白除去。"""
+    if not s:
+        return ""
+    s = s.strip().lower()
+    # 全角英数を半角に
+    s = s.translate(str.maketrans(
+        "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
+        "0123456789abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
+    ))
+    # 空白・記号を除去
+    s = re.sub(r"[\s\u3000・･]+", "", s)
+    return s
+
+def _find_title_highlight_duplicates(title: str, highlights_csv: str) -> dict:
+    """商品名とハイライトで重複するキーワードを検出。
+
+    Returns:
+        {
+            "duplicated_kws": [重複したハイライトKW],
+            "unique_kws": [重複していないハイライトKW],
+            "filtered_csv": "重複除去後のCSV文字列"
+        }
+    """
+    if not title or not highlights_csv:
+        return {"duplicated_kws": [], "unique_kws": [], "filtered_csv": highlights_csv or ""}
+
+    title_norm = _normalize_kw(title)
+    kws = [k.strip() for k in highlights_csv.split(",") if k.strip()]
+
+    duplicated = []
+    unique = []
+    for kw in kws:
+        kw_norm = _normalize_kw(kw)
+        # 完全一致 or タイトルに部分含有 のいずれかで重複扱い
+        if kw_norm and (kw_norm in title_norm):
+            duplicated.append(kw)
+        else:
+            unique.append(kw)
+    return {
+        "duplicated_kws": duplicated,
+        "unique_kws": unique,
+        "filtered_csv": ",".join(unique),
+    }
 
 def _build_user_prompt(genre: str, tone: str, seo_kw: str,
                        base: str, usp: str, spec: str, review: str) -> str:
@@ -957,18 +1028,65 @@ def render_amazon_tab(res: dict):
 
     # 商品のハイライト（2026新仕様・SEOに影響）
     st.markdown("##### 🆕 商品のハイライト（カンマ区切りキーワード）")
-    st.caption("Amazon 2026年アップデートで検索SEOに直接影響。カンマ区切りキーワードで、素材・対象・シーン・スペックを網羅。")
+    st.caption(
+        "Amazon 2026年アップデートで検索SEOに直接影響。"
+        "商品名(title)と重複するキーワードは含めず、両フィールドで検索カバレッジを最大化します。"
+    )
     highlights = a.get("product_highlights", "") or ""
     kw_list = [k.strip() for k in highlights.split(",") if k.strip()]
+
+    # 商品名との重複を検出
+    dup_result = _find_title_highlight_duplicates(title, highlights)
+    duplicated = dup_result["duplicated_kws"]
+    unique = dup_result["unique_kws"]
+
+    # 個数バッジ（有効KW数を目標比較の対象にする）
     st.markdown(
-        _char_badge_count(kw_list, AMAZON_HIGHLIGHT_KW_TARGET),
+        _char_badge_count(unique, AMAZON_HIGHLIGHT_KW_TARGET)
+        + (f'<span class="count-badge badge-ng">重複{len(duplicated)}個</span>' if duplicated else ""),
         unsafe_allow_html=True,
     )
-    st.text_area("Amazon商品ハイライト", value=highlights, height=90,
-                 key="amz_highlights", label_visibility="collapsed")
+
+    # 重複警告
+    if duplicated:
+        st.error(
+            f"⚠️ 商品名と重複するキーワードが {len(duplicated)} 個含まれています "
+            f"（有効な独自キーワードは {len(unique)} 個のみ）。"
+            "重複キーワードは Amazon SEO のインデックス枠を無駄にするため、"
+            "下記『重複除去済み』の版を使うことを推奨します。"
+        )
+
+    # 元のハイライト（AI生成のまま）
+    st.markdown("**AIが生成した原文（重複含む）**")
+    st.text_area("Amazon商品ハイライト_原文", value=highlights, height=80,
+                 key="amz_highlights_raw", label_visibility="collapsed")
+
+    # タグ表示：重複=赤、独自=緑
     if kw_list:
-        st.markdown(" ".join([f'<span class="theme-tag">{kw}</span>' for kw in kw_list]),
-                    unsafe_allow_html=True)
+        tags_html = []
+        for kw in kw_list:
+            if kw in duplicated:
+                tags_html.append(
+                    f'<span class="theme-tag" style="background:#dc2626;">'
+                    f'❌ {kw}<span style="opacity:0.7;font-size:0.7em;"> (title重複)</span></span>'
+                )
+            else:
+                tags_html.append(
+                    f'<span class="theme-tag" style="background:#16a34a;">✓ {kw}</span>'
+                )
+        st.markdown(" ".join(tags_html), unsafe_allow_html=True)
+
+    # 重複除去版
+    if duplicated:
+        st.markdown("**✂️ 重複除去済み版（推奨・そのまま入稿可）**")
+        st.text_area("Amazon商品ハイライト_重複除去",
+                     value=dup_result["filtered_csv"], height=80,
+                     key="amz_highlights_filtered", label_visibility="collapsed")
+        if len(unique) < AMAZON_HIGHLIGHT_KW_TARGET[0]:
+            st.warning(
+                f"⚠️ 重複除去後は {len(unique)} 個のみ（目標 {AMAZON_HIGHLIGHT_KW_TARGET[0]} 個以上）。"
+                "手動でキーワードを補うか、思考予算を上げて再生成することをおすすめします。"
+            )
 
     # 箇条書き
     st.markdown("##### 箇条書き（5本）")
