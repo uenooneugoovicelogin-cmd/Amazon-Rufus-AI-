@@ -245,6 +245,26 @@ class AnalysisSchemaFlat(BaseModel):
     recommended_pattern: str = Field(description="推奨パターン: A / B / C のいずれか1文字")
     ai_recommendation: str = Field(description="推奨理由。2〜3文で。")
 
+# Stage 1a: 商品プロファイル（5フィールドのみ・Geminiが確実に生成できる少なさ）
+class ProfileSchemaFlat(BaseModel):
+    """Stage 1a: 商品プロファイル生成のみに集中"""
+    selected_type: str = Field(description="商品タイプ: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか")
+    type_reason: str = Field(description="判定理由。1〜2文で簡潔に。")
+    extracted_usp: str = Field(description="独自の強み・専門情報。2〜3文で。")
+    target_persona: str = Field(description="主要ターゲット像（年齢・状況・購入動機）。1〜2文で。")
+    key_seo_keywords_csv: str = Field(description="展開SEOキーワードをカンマ区切りで（例: 介護用クッション,体圧分散,通気性）")
+
+# Stage 1b: ネガティブレビュー分析（7フィールドのみ）
+class NegativeAnalysisSchemaFlat(BaseModel):
+    """Stage 1b: ネガティブレビュー変換3パターンの分析のみ"""
+    identified_pain_point: str = Field(description="最大の不安・不満点。1文で。")
+    pain_point_severity: str = Field(description="深刻度: 高 / 中 / 低 のいずれか")
+    pattern_a_text: str = Field(description="パターンA（利点強調）の文章。")
+    pattern_b_text: str = Field(description="パターンB（誠実開示）の文章。")
+    pattern_c_text: str = Field(description="パターンC（メリット変換）の文章。")
+    recommended_pattern: str = Field(description="推奨パターン: A / B / C のいずれか1文字")
+    ai_recommendation: str = Field(description="推奨理由。2〜3文で。")
+
 # Stage 0: 大量レビューを Flash モデルでダイジェスト化するためのスキーマ
 class ReviewDigestSchema(BaseModel):
     """Stage 0: 大量レビューを消化して構造化ダイジェストを作成"""
@@ -530,6 +550,7 @@ def _sanitize_ai_padding(text: str) -> str:
     - \\u2028, \\u2029 (行区切り・段落区切り)
     - \\f (フォームフィード / 改ページ)
     - 3個以上の連続改行
+    - 末尾の記号ゴミ（\\n\\n- \\n\\n"\\n" のような箇条書きモドキ）
 
     これらは全て「AIが埋めるべき情報を持たなかった証拠」であり、実質内容ではない。
     """
@@ -543,8 +564,62 @@ def _sanitize_ai_padding(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     # 繰り返しループを検出・除去
     text = _strip_repetition_loop(text)
+    # 末尾の記号ゴミを除去
+    text = _strip_trailing_garbage(text)
     # 末尾の空白・改行を除去
     return text.strip()
+
+def _strip_trailing_garbage(text: str) -> str:
+    """末尾の記号ゴミ（意味のない記号・改行・引用符の連続）を除去する。
+
+    Gemini 2.5 Pro は稀に、実質的な文章を書き終えた後に
+    「\\n\\n- \\n\\n\"\\n \"\\n\\n\"」のような箇条書きモドキの記号列を
+    延々と生成する。この状態に入ると次のフィールドの生成に到達しなくなる。
+
+    対策: 末尾の意味のある文の終わり（。！？）を探し、その後ろに
+    「意味のない記号だけ」が続くならその部分を除去する。
+    """
+    if not text or not isinstance(text, str) or len(text) < 30:
+        return text
+
+    # 意味のある文字：日本語文字（漢字・ひらがな・カタカナ）、英字、数字
+    meaningful_chars = re.compile(r'[一-龥ぁ-んァ-ヴー々〆ヵヶa-zA-Z0-9]')
+
+    # 末尾から遡って「文末記号（。！？.!?）」の位置を探す
+    sentence_end_pattern = re.compile(r'[。！？.!?]')
+    last_sentence_end = -1
+    for i in range(len(text) - 1, -1, -1):
+        if sentence_end_pattern.match(text[i]):
+            last_sentence_end = i
+            break
+
+    # 文末記号が見つからなければ、末尾から意味のある文字の位置を探す
+    if last_sentence_end == -1:
+        last_meaningful = -1
+        for i in range(len(text) - 1, -1, -1):
+            if meaningful_chars.match(text[i]):
+                last_meaningful = i
+                break
+        if last_meaningful == -1:
+            return text
+        # 意味のある文字の直後で切る
+        tail = text[last_meaningful + 1:]
+        # tailが記号ゴミなら削除
+        if len(tail) > 15 and len(re.findall(meaningful_chars, tail)) < 3:
+            return text[:last_meaningful + 1].rstrip()
+        return text
+
+    # 文末記号より後の内容を検査
+    tail_after_end = text[last_sentence_end + 1:]
+
+    # tailが十分長く、意味のある文字がほとんど無いなら記号ゴミ扱いで削除
+    if len(tail_after_end) > 15:
+        meaningful_count = len(re.findall(meaningful_chars, tail_after_end))
+        # tail のうち意味のある文字が10%未満なら削除
+        if meaningful_count / max(1, len(tail_after_end)) < 0.10:
+            return text[:last_sentence_end + 1].rstrip()
+
+    return text
 
 # Geminiが内部トークンとして扱う識別子（テキスト値に露出したら異常）
 _GEMINI_INTERNAL_TOKENS = [
@@ -1058,72 +1133,120 @@ Markdownコードフェンス禁止・ネスト構造禁止・メタコメント
 上記の**構造**を厳密に守り、内容は入力された商品情報に基づいて書き起こしてください。
 生成順序: 1→2→3→...→12 と順に全フィールドを埋めきってから応答を終了すること。
 """
-    stage1 = _call_gemini_api(
-        api_key, model_name, stage1_prompt, system_instruction,
-        temperature=temperature, thinking_budget=thinking_budget,
-        response_schema=AnalysisSchemaFlat,
-    )
-    if "error" in stage1:
-        return {"error": f"[Stage1エラー] {stage1['error']}",
-                "raw": stage1.get("raw", ""),
-                "_meta": stage1.get("_meta", {})}
 
-    # ---- Stage 1 の欠落フィールド検証と自動リトライ ----
-    stage1_required = [
-        "selected_type", "type_reason", "extracted_usp", "target_persona",
-        "key_seo_keywords_csv", "identified_pain_point", "pain_point_severity",
-        "pattern_a_text", "pattern_b_text", "pattern_c_text",
-        "recommended_pattern", "ai_recommendation",
-    ]
-    stage1_empty = [k for k in stage1_required if not stage1.get(k)]
+    # ---- Stage 1 を 1a と 1b に分割して確実に生成する ----
+    # 12フィールドを一気に生成させると Gemini 2.5 Pro でフィールド欠落が頻発するため、
+    # 5フィールド(プロファイル) + 7フィールド(レビュー分析) に分割する。
 
-    if stage1_empty and len(stage1_empty) > 2:
-        # 大量に欠落している場合は自動リトライ
-        if progress_cb:
-            progress_cb(f"Stage 1 で {len(stage1_empty)} フィールド欠落を検出。強化プロンプトで自動リトライ中...")
+    # === Stage 1a: 商品プロファイル（5フィールド） ===
+    if progress_cb:
+        stage_prefix = "Stage 2a/3" if review_digest_dict else "Stage 1a/2"
+        progress_cb(f"{stage_prefix}: 商品プロファイル生成中（5フィールド）...")
 
-        # 既に埋まったフィールドを提示し、欠落分だけを明示的に要求するプロンプトを作成
-        already_filled = {k: stage1.get(k, "") for k in stage1_required if stage1.get(k)}
-        empty_list = "\n".join([f"- {k}" for k in stage1_empty])
-        retry_prompt = f"""
-【リトライ要求】
-前回の呼び出しで以下フィールドが未生成でした。既生成フィールドはそのまま維持し、
-未生成フィールドを含めた12フィールド全てを埋めた完全なJSONを再度返してください。
-
-【既に生成済みのフィールド】
-{json.dumps(already_filled, ensure_ascii=False, indent=2)}
-
-【今回必ず埋めるべき未生成フィールド】
-{empty_list}
-
-【元の入力データ】
+    stage1a_prompt = f"""【商品情報】
 - ジャンル: {genre}
-- 現在の商品説明: {base[:500]}
-- 自社USP: {usp[:300] if usp else "（未入力）"}
-- スペック: {spec[:300]}
-- レビュー: {review[:500]}
-- 狙いSEOキーワード: {seo_kw if seo_kw else "（文脈から抽出）"}
+- 文章トーン: {tone}
+- 狙いSEOキーワード: {seo_kw if seo_kw else "（未入力：文脈から自動抽出）"}
+- 現在の商品名: {current_title if current_title else "（未入力）"}
 
-Markdownコードフェンス禁止、メタコメント禁止、改行パディング禁止、ネスト構造禁止。
-12フィールドすべてトップレベルに配置したJSONのみを返してください。
+【入力データ】
+- 商品説明: {base}
+- 自社USP: {usp if usp else "（未入力：既存文から抽出）"}
+- スペック: {spec}
+- レビュー: {review}
+
+【指示】
+以下5フィールドのフラットJSONを返してください。全て必須。空文字禁止。装飾なし。
+
+【JSON出力例】
+{{
+  "selected_type": "総合",
+  "type_reason": "機能性とデザイン性が両立しており、バランスの良さから総合タイプと判定しました。",
+  "extracted_usp": "他社にない独自の素材と製法により、耐久性と美観を高次元で両立している点が最大の差別化ポイントです。",
+  "target_persona": "30代の女性で、日常使いのアイテムに品質と見た目の両方を求める層。SNSで情報収集する傾向がある。",
+  "key_seo_keywords_csv": "主要キーワード1,主要キーワード2,関連語1,関連語2,関連語3,シーン語1,シーン語2"
+}}
+
+上記の**構造**を厳密に守り、内容は商品情報に合わせて書き起こしてください。
 """
-        stage1_retry = _call_gemini_api(
-            api_key, model_name, retry_prompt, system_instruction,
-            temperature=temperature, thinking_budget=thinking_budget,
-            response_schema=AnalysisSchemaFlat,
-        )
-        if "error" not in stage1_retry:
-            # 欠落分を埋める（リトライ側で得られた値を優先）
-            for k in stage1_empty:
-                v = stage1_retry.get(k)
-                if v:
-                    stage1[k] = v
-            stage1_empty_after = [k for k in stage1_required if not stage1.get(k)]
-            if progress_cb:
-                if stage1_empty_after:
-                    progress_cb(f"リトライ後もなお {len(stage1_empty_after)} フィールド欠落。処理を継続します...")
-                else:
-                    progress_cb("✅ リトライで全フィールド生成完了")
+    stage1a = _call_gemini_api(
+        api_key, model_name, stage1a_prompt, system_instruction,
+        temperature=temperature, thinking_budget=thinking_budget,
+        response_schema=ProfileSchemaFlat,
+    )
+    if "error" in stage1a:
+        return {"error": f"[Stage1aエラー] {stage1a['error']}",
+                "raw": stage1a.get("raw", ""),
+                "_meta": stage1a.get("_meta", {})}
+
+    # === Stage 1b: ネガティブレビュー分析（7フィールド） ===
+    if progress_cb:
+        stage_prefix = "Stage 2b/3" if review_digest_dict else "Stage 1b/2"
+        progress_cb(f"{stage_prefix}: ネガティブレビュー3パターン変換中（7フィールド）...")
+
+    # Stage 1a の結果を Stage 1b の文脈に渡す（一貫性向上）
+    persona = stage1a.get("target_persona", "")
+
+    stage1b_prompt = f"""【商品情報】
+- ジャンル: {genre}
+- 文章トーン: {tone}
+
+【入力データ】
+- 商品説明: {base}
+- スペック: {spec}
+- レビュー: {review}
+- ターゲット像（Stage 1aで確定）: {persona}
+
+【指示】
+以下7フィールドのフラットJSONを返してください。全て必須。空文字禁止。装飾なし。
+
+【JSON出力例】
+{{
+  "identified_pain_point": "耐久性への不安と、写真と実物の色味の差異を心配する声が最も多い。",
+  "pain_point_severity": "中",
+  "pattern_a_text": "厳格な品質検査を経てお届け。素材本来の色合いを写真忠実に再現しており、実物との差はほぼありません。",
+  "pattern_b_text": "モニター環境により多少の色味の差が出る可能性があります。気になる場合は30日以内であれば返品を承ります。",
+  "pattern_c_text": "微細な色ムラは天然素材ならではの表情で、二つとして同じものがない一点物としてお楽しみいただけます。",
+  "recommended_pattern": "B",
+  "ai_recommendation": "誠実開示によって購入後のミスマッチを防ぎ、信頼獲得と長期的なブランド価値向上に繋がるパターンBを推奨します。"
+}}
+
+上記の**構造**を厳密に守り、内容は商品情報に合わせて書き起こしてください。
+"""
+    stage1b = _call_gemini_api(
+        api_key, model_name, stage1b_prompt, system_instruction,
+        temperature=temperature, thinking_budget=thinking_budget,
+        response_schema=NegativeAnalysisSchemaFlat,
+    )
+    if "error" in stage1b:
+        # Stage 1a は成功しているので、その結果は残しつつ 1b の失敗を通知
+        return {"error": f"[Stage1bエラー] {stage1b['error']}",
+                "raw": stage1b.get("raw", ""),
+                "_meta": stage1b.get("_meta", {}),
+                "product_profile": _unflatten_analysis({**stage1a})["product_profile"]}
+
+    # Stage 1a と 1b の結果をマージして stage1 として扱う
+    stage1 = {**stage1a, **stage1b}
+    # メタ情報も合算
+    m1a = stage1a.get("_meta", {}) or {}
+    m1b = stage1b.get("_meta", {}) or {}
+    u1a = m1a.get("usage") or {}
+    u1b = m1b.get("usage") or {}
+    def _add_num(a, b):
+        if a is None and b is None: return None
+        return (a or 0) + (b or 0)
+    stage1["_meta"] = {
+        "usage": {
+            "prompt_tokens": _add_num(u1a.get("prompt_tokens"), u1b.get("prompt_tokens")),
+            "output_tokens": _add_num(u1a.get("output_tokens"), u1b.get("output_tokens")),
+            "thoughts_tokens": _add_num(u1a.get("thoughts_tokens"), u1b.get("thoughts_tokens")),
+            "total_tokens": _add_num(u1a.get("total_tokens"), u1b.get("total_tokens")),
+        },
+        "finish_reason": f"1a={m1a.get('finish_reason', 'N/A')}, 1b={m1b.get('finish_reason', 'N/A')}",
+        "model": model_name,
+        "split_stage1": True,
+    }
+
 
     # ---- 埋め込みJSON救出を試行 ----
     # AI がフラットスキーマを無視して type_reason などにネスト JSON を詰め込む挙動への対処。
@@ -1172,7 +1295,8 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
 
     # ---- Stage 2: 成果物（フラット22フィールド） ----
     if progress_cb:
-        stage_prefix = "Stage 3/3" if review_digest_dict else "Stage 2/2"
+        # Stage 0あり: 4段階 / Stage 0なし: 3段階
+        stage_prefix = "Stage 3c/3" if review_digest_dict else "Stage 2c/2"
         progress_cb(f"{stage_prefix}: Amazon＆楽天テキスト生成中...")
 
     recommended = str(nra.get("recommended_pattern", "b")).lower()
