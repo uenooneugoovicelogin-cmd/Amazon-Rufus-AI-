@@ -22,6 +22,9 @@ from typing import List
 import json
 import re
 import time
+import csv
+from io import StringIO
+from datetime import datetime
 
 # =========================================================================
 # ページ設定
@@ -1578,6 +1581,140 @@ def _check_rakuten_html_compliance(html: str) -> dict:
         "is_compliant": (not forbidden) and (not inline_style),
     }
 
+# =========================================================================
+# CSV生成関数群
+# =========================================================================
+def _csv_from_rows(rows: list, fieldnames: list) -> str:
+    """行データからCSV文字列を生成（全項目クォート・改行対応）"""
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=fieldnames,
+        quoting=csv.QUOTE_ALL,
+        lineterminator="\r\n",  # Excel互換
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return output.getvalue()
+
+def _generate_full_csv(res: dict) -> str:
+    """全項目を1行のワイドCSVとして生成（スプレッドシート一覧管理用）"""
+    p = res.get("product_profile") or {}
+    n = res.get("negative_review_analysis") or {}
+    a = res.get("amazon_output") or {}
+    r = res.get("rakuten_output") or {}
+
+    # 重複除去済み版も併記
+    amz_title = a.get("title", "") or ""
+    amz_highlights = a.get("product_highlights", "") or ""
+    amz_search = a.get("search_keywords", "") or ""
+    dedup_h = _find_title_highlight_duplicates(amz_title, amz_highlights)["filtered_csv"]
+    dedup_multi = _find_multi_duplicates(amz_title, amz_highlights, amz_search)
+    dedup_s = dedup_multi["search"]["filtered_text"]
+
+    row = {}
+    # === プロファイル ===
+    row["商品タイプ"] = p.get("selected_type", "") or ""
+    row["判定理由"] = p.get("type_reason", "") or ""
+    row["抽出USP"] = p.get("extracted_usp", "") or ""
+    row["ターゲット像"] = p.get("target_persona", "") or ""
+    row["展開SEOキーワード"] = ", ".join(p.get("key_seo_keywords", []) or [])
+    # === ネガティブ分析 ===
+    row["最大の不安点"] = n.get("identified_pain_point", "") or ""
+    row["深刻度"] = n.get("pain_point_severity", "") or ""
+    row["パターンA(利点強調)"] = n.get("pattern_a_text", "") or ""
+    row["パターンB(誠実開示)"] = n.get("pattern_b_text", "") or ""
+    row["パターンC(メリット変換)"] = n.get("pattern_c_text", "") or ""
+    row["推奨パターン"] = n.get("recommended_pattern", "") or ""
+    row["推奨理由"] = n.get("ai_recommendation", "") or ""
+    # === Amazon ===
+    row["Amazon_商品名"] = amz_title
+    row["Amazon_商品ハイライト_原文"] = amz_highlights
+    row["Amazon_商品ハイライト_重複除去済み"] = dedup_h
+    for i in range(1, 6):
+        b = a.get(f"bullet_{i}") or {}
+        theme = b.get("theme", "") if isinstance(b, dict) else ""
+        body = b.get("body", "") if isinstance(b, dict) else ""
+        row[f"Amazon_箇条書き{i}_テーマ"] = theme or ""
+        row[f"Amazon_箇条書き{i}_本文"] = body or ""
+    row["Amazon_商品説明"] = a.get("description", "") or ""
+    row["Amazon_検索キーワード_原文"] = amz_search
+    row["Amazon_検索キーワード_重複除去済み"] = dedup_s
+    qas = a.get("rufus_qa_pairs", []) or []
+    for i in range(5):
+        row[f"Amazon_想定QA_{i+1}"] = str(qas[i]) if i < len(qas) else ""
+    # === 楽天 ===
+    row["楽天_商品タイトル"] = r.get("title", "") or ""
+    row["楽天_キャッチコピー"] = r.get("catchcopy", "") or ""
+    row["楽天_商品説明文_テキスト版"] = r.get("desc_text", "") or ""
+    row["楽天_商品説明文_HTML版"] = r.get("desc_html", "") or ""
+    row["楽天_推奨属性キーワード"] = r.get("attributes", "") or ""
+
+    return _csv_from_rows([row], list(row.keys()))
+
+def _generate_amazon_csv(res: dict) -> str:
+    """Amazon項目のみを縦型CSVで生成（項目名 x 内容の2列）"""
+    a = res.get("amazon_output") or {}
+    amz_title = a.get("title", "") or ""
+    amz_highlights = a.get("product_highlights", "") or ""
+    amz_search = a.get("search_keywords", "") or ""
+    dedup_h = _find_title_highlight_duplicates(amz_title, amz_highlights)["filtered_csv"]
+    dedup_multi = _find_multi_duplicates(amz_title, amz_highlights, amz_search)
+    dedup_s = dedup_multi["search"]["filtered_text"]
+
+    rows = []
+    rows.append({"項目": "商品名(タイトル)", "内容": amz_title})
+    rows.append({"項目": "商品のハイライト(原文)", "内容": amz_highlights})
+    rows.append({"項目": "商品のハイライト(重複除去済み・推奨)", "内容": dedup_h})
+    for i in range(1, 6):
+        b = a.get(f"bullet_{i}") or {}
+        theme = b.get("theme", "") if isinstance(b, dict) else ""
+        body = b.get("body", "") if isinstance(b, dict) else ""
+        rows.append({"項目": f"箇条書き{i} テーマ", "内容": theme})
+        rows.append({"項目": f"箇条書き{i} 本文", "内容": body})
+    rows.append({"項目": "商品説明文", "内容": a.get("description", "") or ""})
+    rows.append({"項目": "検索キーワード欄(原文)", "内容": amz_search})
+    rows.append({"項目": "検索キーワード欄(重複除去済み・推奨)", "内容": dedup_s})
+    qas = a.get("rufus_qa_pairs", []) or []
+    for i in range(5):
+        qa = str(qas[i]) if i < len(qas) else ""
+        rows.append({"項目": f"想定Q&A {i+1}", "内容": qa})
+
+    return _csv_from_rows(rows, ["項目", "内容"])
+
+def _generate_rakuten_csv(res: dict) -> str:
+    """楽天項目のみを縦型CSVで生成"""
+    r = res.get("rakuten_output") or {}
+    rows = [
+        {"項目": "商品タイトル", "内容": r.get("title", "") or ""},
+        {"項目": "キャッチコピー", "内容": r.get("catchcopy", "") or ""},
+        {"項目": "商品説明文(テキスト版)", "内容": r.get("desc_text", "") or ""},
+        {"項目": "商品説明文(HTML版)", "内容": r.get("desc_html", "") or ""},
+        {"項目": "推奨属性キーワード", "内容": r.get("attributes", "") or ""},
+    ]
+    return _csv_from_rows(rows, ["項目", "内容"])
+
+def _generate_analysis_csv(res: dict) -> str:
+    """プロファイル＋ネガティブレビュー分析のみを縦型CSVで生成"""
+    p = res.get("product_profile") or {}
+    n = res.get("negative_review_analysis") or {}
+    rows = [
+        {"項目": "商品タイプ", "内容": p.get("selected_type", "") or ""},
+        {"項目": "判定理由", "内容": p.get("type_reason", "") or ""},
+        {"項目": "抽出USP", "内容": p.get("extracted_usp", "") or ""},
+        {"項目": "ターゲット像", "内容": p.get("target_persona", "") or ""},
+        {"項目": "展開SEOキーワード", "内容": ", ".join(p.get("key_seo_keywords", []) or [])},
+        {"項目": "最大の不安点", "内容": n.get("identified_pain_point", "") or ""},
+        {"項目": "深刻度", "内容": n.get("pain_point_severity", "") or ""},
+        {"項目": "パターンA(利点強調)", "内容": n.get("pattern_a_text", "") or ""},
+        {"項目": "パターンB(誠実開示)", "内容": n.get("pattern_b_text", "") or ""},
+        {"項目": "パターンC(メリット変換)", "内容": n.get("pattern_c_text", "") or ""},
+        {"項目": "推奨パターン", "内容": n.get("recommended_pattern", "") or ""},
+        {"項目": "推奨理由", "内容": n.get("ai_recommendation", "") or ""},
+    ]
+    return _csv_from_rows(rows, ["項目", "内容"])
+
 def _build_user_prompt(genre: str, tone: str, seo_kw: str,
                        base: str, usp: str, spec: str, review: str) -> str:
     return f"""
@@ -2191,6 +2328,52 @@ def main():
     # ---- 結果表示 ----
     if "ecom_result" in st.session_state:
         res = st.session_state["ecom_result"]
+
+        # === CSV ダウンロードセクション ===
+        st.markdown("### 📥 生成結果を CSV でダウンロード")
+        st.caption(
+            "文字コードは UTF-8 BOM 付き（Excel で文字化けしません）。"
+            "改行やカンマを含む本文は全てクォート処理済み。"
+        )
+        _ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        _dl1, _dl2, _dl3, _dl4 = st.columns(4)
+        with _dl1:
+            st.download_button(
+                label="📊 全項目CSV",
+                data=_generate_full_csv(res).encode("utf-8-sig"),
+                file_name=f"ecom_seo_全項目_{_ts}.csv",
+                mime="text/csv",
+                help="全項目を1行にまとめたワイド形式CSV。複数商品をスプレッドシートで一覧管理する用途に最適。",
+                use_container_width=True,
+            )
+        with _dl2:
+            st.download_button(
+                label="🛒 Amazon項目CSV",
+                data=_generate_amazon_csv(res).encode("utf-8-sig"),
+                file_name=f"ecom_seo_amazon_{_ts}.csv",
+                mime="text/csv",
+                help="Amazon項目のみ縦型(項目名×内容)でまとめたCSV。Amazon Seller Central への手動入稿補助用。重複除去済み版も併記。",
+                use_container_width=True,
+            )
+        with _dl3:
+            st.download_button(
+                label="🔴 楽天項目CSV",
+                data=_generate_rakuten_csv(res).encode("utf-8-sig"),
+                file_name=f"ecom_seo_rakuten_{_ts}.csv",
+                mime="text/csv",
+                help="楽天項目のみ縦型でまとめたCSV。楽天RMSへの手動入稿補助用。",
+                use_container_width=True,
+            )
+        with _dl4:
+            st.download_button(
+                label="🧠 分析結果CSV",
+                data=_generate_analysis_csv(res).encode("utf-8-sig"),
+                file_name=f"ecom_seo_分析_{_ts}.csv",
+                mime="text/csv",
+                help="商品プロファイル＋ネガティブレビュー分析のみのCSV。社内資料・報告用。",
+                use_container_width=True,
+            )
+        st.markdown("---")
 
         # Stage 0が動いていた場合、ダイジェストを表示
         digest = res.get("_review_digest")
