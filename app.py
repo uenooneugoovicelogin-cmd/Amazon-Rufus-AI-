@@ -280,12 +280,12 @@ def build_system_instruction(tone_rule: str) -> str:
 # 【絶対厳守】出力形式
 - 出力は必ず**呼び出しごとに指定されたJSONスキーマ**に完全準拠すること。
 - 文字数の指定はすべて「日本語全角＝1文字、半角英数記号＝1文字」でカウントする。
-- 文字数の下限・上限を守れない場合は言い回しを削るか補って必ず範囲内に収める。
+- 文字数指定は目安であり、多少の逸脱は許容する。文字数の調整コメント・編集記録・タイムスタンプなどのメタ情報は絶対に出力しないこと。
 - 【最重要】スキーマに定義された全フィールドを空文字にせず必ず埋めること。
 - 【最重要】スキーマは常に**フラットな一階層構造**である。ネストされたオブジェクト（`{{"product_profile": {{...}}}}` のような入れ子）は絶対に作らない。全フィールドはトップレベルに配置すること。
 - 【最重要】出力にMarkdownコードフェンス（```json や ``` の三連バッククォート）は絶対に含めない。純粋な JSON のみを返す。
 - 【最重要】ある1つのフィールド値の中に、他のフィールドや別のJSONオブジェクトを文字列として詰め込むことは禁止。各フィールドは自身の担当内容だけを埋めること。
-- 【重要】各フィールドの文字数上限を守り、余分な装飾は削って全フィールドを完成させることを最優先とする。
+- 【最重要】文字列値の中に無意味な改行（\\n）の繰り返しや、改ページ文字（\\f）などの装飾文字を含めないこと。実質的な内容だけを書くこと。
 - 【重要】JSON文字列値内の改行は\\nでエスケープし、ダブルクォートは\\"でエスケープすること。
 
 # 【思考プロセス】※内部で必ず順に実行してから出力
@@ -580,23 +580,27 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 4. カスタマーレビュー: {review}
 
 【指示】
-以下12フィールドをトップレベルに持つフラットなJSONを出力してください。
-1フィールドも省略・空文字禁止。ネスト構造禁止。Markdownコードフェンス禁止。
-各フィールドは自身の担当内容のみを埋めること（他のフィールドの情報を混ぜない）。
+以下の**JSON出力例**と同じ構造で、12フィールドすべてをトップレベルに埋めたJSONを返してください。
+Markdownコードフェンス禁止・ネスト構造禁止・メタコメント禁止・改行パディング禁止。
+各フィールドは実質的な内容だけを書くこと（「調整しました」等の作業コメントを含めない）。
 
-# 出力すべき12フィールド（すべてトップレベル）
-1. selected_type: 機能重視 / デザイン重視 / コスパ重視 / 総合 のいずれか
-2. type_reason: 判定理由（60〜100文字）※このフィールドには判定理由のみを書くこと
-3. extracted_usp: 独自の強み・専門情報（100〜150文字）
-4. target_persona: ターゲット像（年齢・状況・購入動機、1〜2文）
-5. key_seo_keywords_csv: 展開SEOキーワード5〜10個をカンマ区切り
-6. identified_pain_point: 最大の不安・不満点（1文）
-7. pain_point_severity: 高 / 中 / 低 のいずれか
-8. pattern_a_text: 利点強調パターン（80〜120文字）
-9. pattern_b_text: 誠実開示パターン（80〜120文字）
-10. pattern_c_text: メリット変換パターン（80〜120文字）
-11. recommended_pattern: A / B / C のいずれか1文字
-12. ai_recommendation: 推奨理由（100〜150文字）
+【JSON出力例（この構造を厳密に守る。内容は実際の商品に合わせて書き換える）】
+{{
+  "selected_type": "総合",
+  "type_reason": "機能性とデザイン性が両立しており、特定要素に偏らないバランスの良さから総合タイプと判定しました。",
+  "extracted_usp": "他社にない独自の素材と製法により、耐久性と美観を高次元で両立している点が最大の差別化ポイントです。",
+  "target_persona": "30代の女性で、日常使いのアイテムに品質と見た目の両方を求める層。SNSで情報収集する傾向がある。",
+  "key_seo_keywords_csv": "主要キーワード1,主要キーワード2,関連語1,関連語2,関連語3,シーン語1,シーン語2",
+  "identified_pain_point": "耐久性への不安と、写真と実物の色味の差異を心配する声が最も多い。",
+  "pain_point_severity": "中",
+  "pattern_a_text": "厳格な品質検査を経てお届け。素材本来の色合いを写真忠実に再現しており、実物との差はほぼありません。",
+  "pattern_b_text": "モニター環境により多少の色味の差が出る可能性があります。気になる場合は30日以内であれば返品を承ります。",
+  "pattern_c_text": "微細な色ムラは天然素材ならではの表情で、二つとして同じものがない一点物としてお楽しみいただけます。",
+  "recommended_pattern": "B",
+  "ai_recommendation": "誠実開示によって購入後のミスマッチを防ぎ、信頼獲得と長期的なブランド価値向上に繋がるパターンBを推奨します。"
+}}
+
+上記の**構造**を厳密に守り、内容は入力された商品情報に基づいて書き起こしてください。
 """
     stage1 = _call_gemini_api(
         api_key, model_name, stage1_prompt, system_instruction,
@@ -607,6 +611,63 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
         return {"error": f"[Stage1エラー] {stage1['error']}",
                 "raw": stage1.get("raw", ""),
                 "_meta": stage1.get("_meta", {})}
+
+    # ---- Stage 1 の欠落フィールド検証と自動リトライ ----
+    stage1_required = [
+        "selected_type", "type_reason", "extracted_usp", "target_persona",
+        "key_seo_keywords_csv", "identified_pain_point", "pain_point_severity",
+        "pattern_a_text", "pattern_b_text", "pattern_c_text",
+        "recommended_pattern", "ai_recommendation",
+    ]
+    stage1_empty = [k for k in stage1_required if not stage1.get(k)]
+
+    if stage1_empty and len(stage1_empty) > 2:
+        # 大量に欠落している場合は自動リトライ
+        if progress_cb:
+            progress_cb(f"Stage 1 で {len(stage1_empty)} フィールド欠落を検出。強化プロンプトで自動リトライ中...")
+
+        # 既に埋まったフィールドを提示し、欠落分だけを明示的に要求するプロンプトを作成
+        already_filled = {k: stage1.get(k, "") for k in stage1_required if stage1.get(k)}
+        empty_list = "\n".join([f"- {k}" for k in stage1_empty])
+        retry_prompt = f"""
+【リトライ要求】
+前回の呼び出しで以下フィールドが未生成でした。既生成フィールドはそのまま維持し、
+未生成フィールドを含めた12フィールド全てを埋めた完全なJSONを再度返してください。
+
+【既に生成済みのフィールド】
+{json.dumps(already_filled, ensure_ascii=False, indent=2)}
+
+【今回必ず埋めるべき未生成フィールド】
+{empty_list}
+
+【元の入力データ】
+- ジャンル: {genre}
+- 現在の商品説明: {base[:500]}
+- 自社USP: {usp[:300] if usp else "（未入力）"}
+- スペック: {spec[:300]}
+- レビュー: {review[:500]}
+- 狙いSEOキーワード: {seo_kw if seo_kw else "（文脈から抽出）"}
+
+Markdownコードフェンス禁止、メタコメント禁止、改行パディング禁止、ネスト構造禁止。
+12フィールドすべてトップレベルに配置したJSONのみを返してください。
+"""
+        stage1_retry = _call_gemini_api(
+            api_key, model_name, retry_prompt, system_instruction,
+            temperature=temperature, thinking_budget=thinking_budget,
+            response_schema=AnalysisSchemaFlat,
+        )
+        if "error" not in stage1_retry:
+            # 欠落分を埋める（リトライ側で得られた値を優先）
+            for k in stage1_empty:
+                v = stage1_retry.get(k)
+                if v:
+                    stage1[k] = v
+            stage1_empty_after = [k for k in stage1_required if not stage1.get(k)]
+            if progress_cb:
+                if stage1_empty_after:
+                    progress_cb(f"リトライ後もなお {len(stage1_empty_after)} フィールド欠落。処理を継続します...")
+                else:
+                    progress_cb("✅ リトライで全フィールド生成完了")
 
     # ---- 埋め込みJSON救出を試行 ----
     # AI がフラットスキーマを無視して type_reason などにネスト JSON を詰め込む挙動への対処。
