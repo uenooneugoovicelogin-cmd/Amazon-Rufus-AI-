@@ -339,6 +339,16 @@ def build_system_instruction(tone_rule: str) -> str:
   ・行区切り（U+2028）、段落区切り（U+2029）
   ・フォームフィード（\\f）、垂直タブ（\\v）
   ・3個以上の連続改行（\\n\\n\\n以上）
+- 【最重要】以下の「構造化出力の内部識別子」は絶対にテキスト値として出力しないこと。
+  これらは出力すべきコンテンツではなく、システム内部の識別子である：
+  ・json_start / json_end / json_content / json_body
+  ・response_start / response_end / response_content
+  ・output_start / output_end / content_start / content_end
+  ・schema_start / schema_end / field_start / field_end
+  上記の識別子が万一頭に浮かんでも、それは出力してはならない。ユーザー向けの日本語コンテンツだけを書くこと。
+- 【最重要】同じ単語・フレーズを連続して繰り返さないこと。
+  「A A A A A」「AB AB AB AB」のような反復パターンは絶対に生成しない。
+  もしそのような反復が始まりそうになったら、直ちに別の内容に切り替えるか、そのフィールドの生成を打ち切って次のフィールドに移ること。
 - 【最重要】文字数の下限・上限は「目安」であり、実質的な内容を書き切ったら
   それ以上の文字数のために文章を水増しせず、その時点でフィールドを完成させて次のフィールドへ移ること。
   内容が短くても構わない。長さを稼ぐための無意味な繰り返し・記号列は禁止。
@@ -513,8 +523,88 @@ def _sanitize_ai_padding(text: str) -> str:
     text = text.replace("\f", "").replace("\v", "")
     # 3個以上の連続改行を2個に圧縮
     text = re.sub(r"\n{3,}", "\n\n", text)
+    # 繰り返しループを検出・除去
+    text = _strip_repetition_loop(text)
     # 末尾の空白・改行を除去
     return text.strip()
+
+# Geminiが内部トークンとして扱う識別子（テキスト値に露出したら異常）
+_GEMINI_INTERNAL_TOKENS = [
+    "json_start", "json_end", "json_content", "json_body",
+    "response_start", "response_end", "response_content",
+    "output_start", "output_end", "content_start", "content_end",
+    "schema_start", "schema_end", "field_start", "field_end",
+]
+
+def _strip_repetition_loop(text: str) -> str:
+    """AI応答内の繰り返しループを検出・除去する。
+
+    Gemini 2.5 Pro は稀に構造化出力の内部トークン（json_start等）を
+    テキスト値として出力し、そのままループに陥って何百回も繰り返すバグがある。
+    また、任意の単語やフレーズを異常な回数繰り返すこともある。
+
+    対策:
+    1. Gemini内部トークンが5回以上出現 → 全て除去
+    2. 3〜30文字のフレーズが5回以上連続で繰り返される → 初回のみ残して除去
+    3. 単語（3文字以上）が5回以上繰り返される → 初回のみ残す
+    """
+    if not text or len(text) < 20:
+        return text
+
+    # 1. Gemini内部トークンの露出を検出・除去
+    for token in _GEMINI_INTERNAL_TOKENS:
+        # 部分一致検索（json_start_extra なども対象）
+        if text.count(token) >= 3:
+            # トークン全体を除去（前後の区切り文字も一緒に）
+            text = re.sub(rf"\b{re.escape(token)}\w*\b\s*[,、。\s]*", "", text, flags=re.IGNORECASE)
+
+    # 2. 単語レベルの繰り返しループを除去
+    # 3文字以上の英数字語 or 2文字以上の日本語が5回以上連続 → 初回のみ残す
+    # 英語単語
+    text = re.sub(r"(\b\w{3,}\b)(\s+\1){4,}", r"\1", text)
+    # 日本語単語（漢字/ひらがな/カタカナ 2文字以上）
+    text = re.sub(r"([一-龥ぁ-んァ-ヴー]{2,})(\s*\1){4,}", r"\1", text)
+
+    # 3. 短フレーズ（4〜30文字）が5回以上繰り返される場合、初回のみ残す
+    # 例: "abc def abc def abc def abc def abc def" → "abc def"
+    for phrase_len in [4, 6, 8, 10, 15, 20, 30]:
+        pattern = rf"(.{{{phrase_len}}}?)(?:\1){{4,}}"
+        text = re.sub(pattern, r"\1", text)
+
+    # 4. 連続空白の圧縮
+    text = re.sub(r"[ \t]{3,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+def _detect_repetition_loop(text: str) -> dict:
+    """繰り返しループが元々存在したかを判定（UI警告用）。
+
+    Returns:
+        {
+            "detected": bool,
+            "type": "internal_token" | "phrase_repetition" | None,
+            "sample": "検出されたパターンの例",
+        }
+    """
+    if not text or len(text) < 50:
+        return {"detected": False, "type": None, "sample": ""}
+
+    # 内部トークン検出
+    for token in _GEMINI_INTERNAL_TOKENS:
+        if text.count(token) >= 3:
+            return {"detected": True, "type": "internal_token", "sample": token}
+
+    # 単語の異常繰り返し
+    m = re.search(r"(\b\w{3,}\b)(\s+\1){4,}", text)
+    if m:
+        return {"detected": True, "type": "phrase_repetition", "sample": m.group(1)}
+
+    m = re.search(r"([一-龥ぁ-んァ-ヴー]{2,})(\s*\1){4,}", text)
+    if m:
+        return {"detected": True, "type": "phrase_repetition", "sample": m.group(1)}
+
+    return {"detected": False, "type": None, "sample": ""}
 
 def _sanitize_response_dict(d: dict) -> dict:
     """レスポンス辞書内の全文字列値をサニタイズ。ネストしたdict/listにも対応。"""
@@ -1325,9 +1415,34 @@ def render_profile_and_reviews(res: dict):
 
     col1, col2 = st.columns([1, 1.3], gap="medium")
 
+    # 繰り返しループ検出（全フィールドを対象に走査）
+    p = res.get("product_profile") or {}
+    n = res.get("negative_review_analysis") or {}
+    loop_detected_fields = []
+    for field_name in ["type_reason", "extracted_usp", "target_persona"]:
+        v = p.get(field_name, "")
+        det = _detect_repetition_loop(v) if isinstance(v, str) else {"detected": False}
+        if det["detected"]:
+            loop_detected_fields.append((f"product_profile.{field_name}", det["sample"]))
+    for field_name in ["identified_pain_point", "pattern_a_text", "pattern_b_text",
+                        "pattern_c_text", "ai_recommendation"]:
+        v = n.get(field_name, "")
+        det = _detect_repetition_loop(v) if isinstance(v, str) else {"detected": False}
+        if det["detected"]:
+            loop_detected_fields.append((f"negative_review_analysis.{field_name}", det["sample"]))
+
+    if loop_detected_fields:
+        sample_names = ", ".join([f"`{fn}` (「{sm}」を反復)" for fn, sm in loop_detected_fields[:3]])
+        st.error(
+            f"⚠️ **AIの繰り返しループ幻覚を検出しました**（Gemini 2.5系の既知バグ）\n\n"
+            f"対象フィールド: {sample_names}"
+            + ("..." if len(loop_detected_fields) > 3 else "")
+            + "\n\n該当フィールドは自動的に反復部分を除去して表示していますが、"
+            "内容が短くなっている可能性があります。品質確保のため、思考予算を上げて再生成することを推奨します。"
+        )
+
     with col1:
         st.subheader("📋 商品プロファイリング")
-        p = res.get("product_profile") or {}
         st.markdown(f"**商品タイプ**：`{_g(p, 'selected_type')}`")
         st.markdown(f"**判定理由**：{_g(p, 'type_reason')}")
         st.markdown(f"**抽出USP**：{_g(p, 'extracted_usp')}")
@@ -1341,7 +1456,6 @@ def render_profile_and_reviews(res: dict):
 
     with col2:
         st.subheader("💡 ネガティブ変換 3パターン")
-        n = res.get("negative_review_analysis") or {}
         st.markdown(
             f"<div class='ai-box'>"
             f"<strong>🔎 最大の不安・不満点：</strong>{_g(n, 'identified_pain_point')}<br>"
