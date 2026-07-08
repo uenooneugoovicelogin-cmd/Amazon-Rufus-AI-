@@ -40,9 +40,52 @@ AMAZON_TITLE_HARD_MAX = 75
 AMAZON_BULLET_TARGET = (80, 120)     # テーマラベル【】部分を除いた本文の目安
 AMAZON_DESC_TARGET = (500, 800)
 AMAZON_HIGHLIGHT_KW_TARGET = (7, 15)  # 商品のハイライト：カンマ区切りキーワード数
+AMAZON_SEARCH_KW_BYTE_LIMIT = 500    # Amazon 検索キーワード欄：500バイト上限（半角=1B, 全角=3B目安）
+AMAZON_SEARCH_KW_TARGET = (15, 40)   # 検索キーワード欄：目安KW個数
 RAKUTEN_CATCH_TARGET = (60, 120)
 RAKUTEN_CATCH_HARD_MAX = 127         # スマホ表示ハード上限（超過で見切れ）
+RAKUTEN_TITLE_TARGET = (60, 127)     # 楽天商品タイトル：60〜127文字
+RAKUTEN_TITLE_HARD_MAX = 127         # 楽天タイトル絶対上限
 RAKUTEN_TEXT_TARGET = (300, 600)
+RAKUTEN_ATTR_KW_TARGET = (5, 15)     # 楽天推奨属性キーワード数
+
+# 楽天HTMLで使用可能なタグ（スマホ・PC両対応）
+RAKUTEN_HTML_ALLOWED_TAGS = ["h3", "h4", "h5", "p", "br", "ul", "ol", "li", "strong", "b", "em", "i"]
+# 楽天HTMLで禁止のタグ（保存不可・表示崩れ・スマホNG）
+RAKUTEN_HTML_FORBIDDEN_TAGS = ["font", "style", "script", "iframe", "form", "link", "meta",
+                                "base", "applet", "object", "embed", "param", "div", "span",
+                                "h1", "h2", "img", "table", "tr", "td", "th"]
+
+# 知的財産権リスク：Amazonで違反検知されやすい有名IP/ブランド/キャラクター名（一部）
+# 完全網羅は不可能なため、AIに指示＋UIで代表例を検出する二段構え
+IP_RISKY_KEYWORDS = [
+    # 任天堂・ポケモン系
+    "ポケモン", "ピカチュウ", "イーブイ", "ミュウ", "ミュウツー", "ライチュウ", "デデンネ",
+    "ヌオー", "ヤドキング", "ヤドラン", "ゼニガメ", "フシギダネ", "ヒトカゲ", "リザードン",
+    "マリオ", "ルイージ", "ヨッシー", "カービィ", "ゼルダ", "スプラトゥーン", "任天堂", "Nintendo",
+    "スーパーマリオ", "どうぶつの森", "ポケモンfit", "ポケモンFit", "pokemonfit", "Pokemon fit",
+    # サンリオ
+    "ハローキティ", "サンリオ", "キティ", "マイメロディ", "シナモロール", "クロミ", "ポムポムプリン",
+    "ぐでたま", "ポチャッコ", "けろけろけろっぴ",
+    # ディズニー
+    "ディズニー", "Disney", "ミッキー", "ミニー", "ドナルド", "デイジー", "プーさん",
+    "アナ雪", "ピクサー", "トイストーリー", "アリエル",
+    # サンエックス
+    "リラックマ", "すみっコぐらし", "すみっこぐらし",
+    # 集英社・少年ジャンプ
+    "ワンピース", "ONE PIECE", "鬼滅の刃", "呪術廻戦", "ドラゴンボール", "進撃の巨人",
+    "名探偵コナン", "スラムダンク", "ハイキュー", "ジョジョ", "NARUTO", "ナルト",
+    # 講談社・その他
+    "セーラームーン", "ドラえもん", "アンパンマン", "しまじろう", "プリキュア",
+    # VTuber・キャラ
+    "にじさんじ", "ホロライブ", "ちいかわ", "うさぎ", "ハチワレ", "モモンガ",
+    # サブカル略称（商品名として使用されがちなもの）
+    "ともぬい", "にじぬい", "ちびぬい", "もちころりん", "にじぱぺっと",
+    # Apple関連
+    "iPhone", "iPad", "AirPods", "MacBook", "Apple",
+    # 高級ブランド
+    "エルメス", "シャネル", "ルイヴィトン", "グッチ", "プラダ", "ロレックス", "カルティエ",
+]
 
 # 推奨モデル（現行）
 AVAILABLE_MODELS = [
@@ -218,11 +261,13 @@ class ContentSchemaFlat(BaseModel):
     amz_qa_3: str = Field(description="Rufus想定Q&A 3個目")
     amz_qa_4: str = Field(description="Rufus想定Q&A 4個目")
     amz_qa_5: str = Field(description="Rufus想定Q&A 5個目")
+    amz_search_keywords: str = Field(description="Amazon検索キーワード欄。半角スペース区切りで500バイト以内。【最重要】amz_titleとamz_product_highlightsに含まれるキーワードは絶対に含めない（Amazon SEO重複排除ルール）。同義語・関連語・別シーン語で構成する。")
     # 楽天
+    rak_title: str = Field(description="楽天商品タイトル。60〜127文字（絶対上限127）。SEO主要KWを冒頭に配置。ブランド名→主要KW→スペック→用途の順。")
     rak_catchcopy: str = Field(description="楽天キャッチコピー60〜120文字（絶対上限127）")
     rak_desc_text: str = Field(description="楽天テキスト説明300〜600文字")
-    rak_desc_html: str = Field(description="楽天HTML説明。h3見出し3〜5個、ulリスト活用、strong強調は要所のみ")
-    rak_search_kw: str = Field(description="楽天検索キーワード欄。半角スペース区切り10〜30個")
+    rak_desc_html: str = Field(description="楽天HTML説明。使用可能タグは h3/h4/h5/p/br/ul/ol/li/strong/b/em/i のみ。font/style/script/iframe/div/span/h1/h2/img/table/インラインstyle属性は絶対禁止（スマホで保存不可）。色装飾は使わず見出しとstrong強調のみで視覚設計する。")
+    rak_attributes: str = Field(description="楽天推奨属性キーワード。カンマ区切りで、以下のカテゴリを含める：カラー・サイズ・素材・ブランド・キャラクター(該当あれば)・対象年齢・使用シーン。例: カラー:ホワイト,サイズ:15×21×9cm,素材:PUレザー,ブランド:iikuru,対象:大人女性,シーン:推し活")
 
 def _unflatten_analysis(flat: dict) -> dict:
     """フラットな分析結果を元のネスト構造に組み直す。"""
@@ -256,6 +301,7 @@ def _unflatten_content(flat: dict) -> dict:
         "product_highlights": flat.get("amz_product_highlights", ""),
         "description": flat.get("amz_description", ""),
         "rufus_qa_pairs": qa_pairs,
+        "search_keywords": flat.get("amz_search_keywords", ""),
     }
     for i in range(1, 6):
         amazon[f"bullet_{i}"] = {
@@ -263,10 +309,11 @@ def _unflatten_content(flat: dict) -> dict:
             "body": flat.get(f"amz_bullet_{i}_body", ""),
         }
     rakuten = {
+        "title": flat.get("rak_title", ""),
         "catchcopy": flat.get("rak_catchcopy", ""),
         "desc_text": flat.get("rak_desc_text", ""),
         "desc_html": flat.get("rak_desc_html", ""),
-        "search_keywords_field": flat.get("rak_search_kw", ""),
+        "attributes": flat.get("rak_attributes", ""),
     }
     return {"amazon_output": amazon, "rakuten_output": rakuten}
 
@@ -349,22 +396,67 @@ def build_system_instruction(tone_rule: str) -> str:
   ・「最高」「日本一」「絶対」等の景表法違反表現禁止
   ・薬機法違反の効果効能表現禁止
 
-# 【★最重要 Amazon 商品名(amz_title)と商品ハイライト(amz_product_highlights)の重複禁止ルール】
-- 商品名と商品ハイライトは Amazon 検索アルゴリズムでそれぞれ独立してインデックスされるため、
-  両者で同じキーワードを使うことはSEO上「インデックス枠の無駄遣い」となり、
+# 【★最重要 Amazon 商品名(amz_title)・商品ハイライト(amz_product_highlights)・検索キーワード(amz_search_keywords) 3フィールド重複禁止ルール】
+- この3フィールドは Amazon 検索アルゴリズムでそれぞれ独立してインデックスされるため、
+  複数のフィールドで同じキーワードを使うことはSEO上「インデックス枠の無駄遣い」となり、
   検索カバレッジを大きく損なう最大のアンチパターンである。
-- ルール: 商品名で使ったキーワードは商品ハイライトに絶対に含めない。逆も同様。
+- ルール: 3フィールド間で同じキーワードは絶対に重複させない。各フィールドは互いに補完する異なる検索語で構成する。
 - 具体例:
-  ・NG: 商品名「ぬいポーチ 15cm 2体収納 PUレザー」 かつ ハイライト「ぬいポーチ,15cm,2体収納,PUレザー」
-    → 完全重複でSEO無効
-  ・OK: 商品名「ぬいポーチ 15cm 2体収納 PUレザー」 かつ ハイライト「痛バッグ,ぬい活,ディスプレイケース,自立,見せる収納」
-    → 補完関係で検索カバレッジ最大化
+  ・NG: title「ぬいポーチ 15cm PUレザー」 highlights「ぬいポーチ,15cm,PUレザー」 search_kw「ぬいポーチ 15cm」
+    → 全て重複でSEO無効
+  ・OK: title「ぬいポーチ 15cm PUレザー」 highlights「痛バッグ,ディスプレイケース,自立」 search_kw「見せる収納 大人向け 韓国風」
+    → 3フィールドすべて補完関係で検索カバレッジ最大化
 - 生成手順（厳守）:
-  Step1. amz_title を先に確定させる（主要検索KWをここに配置）
-  Step2. amz_title の各キーワードをリストアップし記憶する
-  Step3. amz_product_highlights には Step2 のリストに**含まれないキーワードだけ**を配置する
-         （同義語・関連語・別カテゴリの検索語・別の使用シーン語などで補完する）
-- 表記ゆれも重複扱いとする（例: 商品名に「15cm」 ハイライトに「15センチ」も禁止）。
+  Step1. amz_title を先に確定させる（主要検索KWを配置）
+  Step2. title の各キーワードをリストアップして記憶する（リストA）
+  Step3. amz_product_highlights は リストA に含まれない語だけで構成する（リストBを構築）
+  Step4. amz_search_keywords は リストA + リストB のいずれにも含まれない語だけで構成する
+- 表記ゆれも重複扱いとする（例: 「15cm」と「15センチ」、「PUレザー」と「PUL」など）。
+- amz_search_keywords は500バイト以内（半角スペース区切り、半角英数=1B・全角=約3B）。
+
+# 【★最重要 楽天HTML説明文(rak_desc_html)の使用可能タグ制限（スマホ保存対応）】
+- 楽天RMSのスマホ版商品説明文には厳しいタグ制限があり、以下を厳守しないと保存できない。
+- 【使用可能タグ（このリスト以外は絶対禁止）】:
+  <h3>, <h4>, <h5>, <p>, <br>, <ul>, <ol>, <li>, <strong>, <b>, <em>, <i>
+- 【使用禁止タグ】:
+  <font>, <style>, <script>, <iframe>, <form>, <link>, <meta>, <base>, <applet>,
+  <object>, <embed>, <param>, <div>, <span>, <h1>, <h2>, <img>, <table>, <tr>, <td>, <th>
+- 【禁止属性】: すべてのタグの style="..." インラインCSS属性、class属性、id属性、onclick等のイベント属性
+- 【禁止事項】: 色装飾（<font color=...> や style="color:..." など）は一切使用しない。
+  視覚設計は「見出し(h3)、リスト(ul li)、強調(strong)」のみで構成すること。
+- 出力例（正しい）:
+  <h3>製品の特徴</h3>
+  <p>大切なぬいぐるみを美しく守る、上質な素材を採用しました。</p>
+  <ul>
+  <li><strong>厚さ9cmのマチ</strong>で余裕の収納力</li>
+  <li>丁寧な縫製で長く使える耐久性</li>
+  </ul>
+- rak_desc_html はPCとスマホの両方で問題なく表示・保存できるHTMLである必要がある。
+
+# 【★最重要 知的財産権リスク回避】
+- 商品名・キャッチコピー・説明文・キーワード欄・箇条書き・Q&A・その他すべてのフィールドで、
+  他社が権利を持つブランド名・キャラクター名・作品名を絶対に使用しない。
+- 【使用禁止の代表例（これらを含めた場合Amazon違反検知される可能性が高い）】:
+  ・任天堂: ポケモン、ピカチュウ、イーブイ、ライチュウ、ヌオー、ヤドキング、デデンネ、ミュウ、
+    ゼニガメ、フシギダネ、ヒトカゲ、リザードン、マリオ、ルイージ、ヨッシー、カービィ、ゼルダ、
+    スーパーマリオ、ポケモンfit、Pokemon fit、Nintendo
+  ・サンリオ: ハローキティ、キティ、マイメロディ、シナモロール、クロミ、ポムポムプリン、ぐでたま
+  ・ディズニー・ピクサー: Disney、ディズニー、ミッキー、ミニー、ドナルド、プーさん、アナ雪、
+    トイストーリー、ピクサー
+  ・サンエックス: リラックマ、すみっコぐらし
+  ・少年ジャンプ: ワンピース、ONE PIECE、鬼滅の刃、呪術廻戦、ドラゴンボール、進撃の巨人、
+    NARUTO、ジョジョ、ハイキュー
+  ・その他IP: ドラえもん、アンパンマン、しまじろう、プリキュア、名探偵コナン、セーラームーン
+  ・VTuber: にじさんじ、ホロライブ、ちいかわ、ハチワレ、うさぎ（ちいかわ）
+  ・略称/俗称: ともぬい、にじぬい、ちびぬい、もちころりん、にじぱぺっと
+    （これらは他社IPの商品カテゴリ名・略称であり使用不可）
+  ・Apple: iPhone、iPad、AirPods、Apple、MacBook
+  ・高級ブランド: エルメス、シャネル、ルイヴィトン、グッチ、プラダ、ロレックス
+- 【代替表現の作り方】:
+  ・特定キャラ名の代わりに → 「お気に入りのキャラクター」「大切なぬいぐるみ」「推しの人形」
+  ・特定シリーズ名の代わりに → 「15cmサイズのぬいぐるみ」「ボリュームのあるぬいぐるみ」
+  ・他社ブランド名の代わりに → 「一般的な○○」「他社製品」（比較表現も控えめに）
+- 疑わしい場合は使わない。一般名詞（ぬいぐるみ、ポーチ、バッグ等）は問題なし。
 
 # 【法律・規約コンプライアンス（違反ゼロ）】
 - 薬機法: 治る/防ぐ/効く/改善する/予防する 等の医療的効果効能表現は絶対禁止。
@@ -688,6 +780,7 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
                             system_instruction: str,
                             genre: str, tone: str, seo_kw: str,
                             base: str, usp: str, spec: str, review: str,
+                            current_title: str = "",
                             temperature: float = 0.5,
                             thinking_budget: int = 2048,
                             progress_cb=None) -> dict:
@@ -696,6 +789,8 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
     Geminiの構造化出力はList[str]やネストクラスでフィールド欠落が起きやすいため、
     各段とも全フィールドをstrに平坦化したスキーマで呼び出す。
     パース後に元のネスト構造へ組み直して返す。
+
+    current_title: 現在の商品名（あれば）。整合性維持のためStage 1/2の文脈に渡す。
     """
     # ---- Stage 1: 分析（フラット12フィールド） ----
     if progress_cb:
@@ -708,10 +803,11 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
 - 狙いSEOキーワード: {seo_kw if seo_kw else "（未入力：文脈から自動抽出）"}
 
 【入力データ】
-1. 現在の商品説明: {base}
-2. 自社の強み・USP: {usp if usp else "（未入力：既存文から抽出）"}
-3. スペック・仕様: {spec}
-4. カスタマーレビュー: {review}
+1. 現在の商品名: {current_title if current_title else "（未入力）"}
+2. 現在の商品説明: {base}
+3. 自社の強み・USP: {usp if usp else "（未入力：既存文から抽出）"}
+4. スペック・仕様: {spec}
+5. カスタマーレビュー: {review}
 
 【指示】
 以下の**JSON出力例**と同じ構造で、12フィールドすべてをトップレベルに埋めたJSONを返してください。
@@ -868,10 +964,11 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
 - 狙いSEOキーワード: {seo_kw if seo_kw else "（Stage1のkey_seo_keywordsを活用）"}
 
 【入力データ】
-1. 現在の商品説明: {base}
-2. 自社の強み・USP: {usp if usp else "（未入力）"}
-3. スペック・仕様: {spec}
-4. カスタマーレビュー: {review}
+1. 現在の商品名: {current_title if current_title else "（未入力：新規に最適タイトルを生成）"}
+2. 現在の商品説明: {base}
+3. 自社の強み・USP: {usp if usp else "（未入力）"}
+4. スペック・仕様: {spec}
+5. カスタマーレビュー: {review}
 
 【Stage1で確定済みの分析結果（前提として使用）】
 - 商品タイプ: {pp.get('selected_type', '')}
@@ -883,30 +980,39 @@ Markdownコードフェンス禁止、メタコメント禁止、改行パディ
 - 推奨パターン本文: {recommended_text}
 
 【指示】
-以下22フィールドを全て埋めた JSON を出力してください。1フィールドも省略・空文字禁止。
+以下24フィールドを全て埋めた JSON を出力してください。1フィールドも省略・空文字禁止。
+また、システム命令に定義された下記3つのルールを絶対に守ること：
+(A) 知的財産権リスクキーワード（ポケモン等の有名IP）は一切使わない
+(B) rak_desc_html はスマホ保存規約準拠のタグのみ使用（h3/h4/h5/p/br/ul/ol/li/strong/b/em/i のみ、色装飾禁止）
+(C) Amazon 3フィールド間の重複禁止（title / product_highlights / search_keywords）
 
-# Amazon系
+# Amazon系（14フィールド）
 1. amz_title: 商品名（50〜75文字、絶対上限75文字）
 2. amz_product_highlights: 商品ハイライト（カンマ区切り7〜15個）
-   ★★★ 最重要ルール ★★★
-   amz_title に既に含まれているキーワードは絶対に含めないこと。
-   両フィールドの検索カバレッジを最大化するため、商品名で使わなかった
-   別カテゴリの検索語（同義語・関連語・別シーン語・別ペルソナ語など）だけを配置する。
-   生成手順: (1)先にamz_titleを完成させる → (2)titleの各語をリストアップ →
-   (3)そのリストに含まれない語だけでhighlightsを組み立てる。
-   例: title「iikuru ぬいポーチ 15cm 2体収納 PUレザー ショルダーバッグ」
-       → highlightsで使ってよい語: 痛バッグ, ぬい活, ディスプレイケース, 自立, 見せる収納, ポケモンfit対応 等
-       → highlightsで禁止の語: ぬいポーチ, 15cm, 2体収納, PUレザー, ショルダーバッグ（全てtitleに既出）
+   ★重複禁止★ amz_title に含まれるキーワードは絶対に使用しない
 3-12. amz_bullet_1_theme, amz_bullet_1_body, ..., amz_bullet_5_theme, amz_bullet_5_body:
-     箇条書き5本のテーマと本文。テーマは重複禁止。本文は各80〜120文字。
+     箇条書き5本のテーマと本文。テーマは重複禁止。
 13. amz_description: 商品説明文（500〜800文字）
 14-18. amz_qa_1〜5: Rufus想定Q&A。『Q: 質問 / A: 回答』形式
+19. amz_search_keywords: 検索キーワード欄（半角スペース区切り、500バイト以内）
+   ★重複禁止★ amz_title と amz_product_highlights のどちらにも含まれないキーワードだけを配置
 
-# 楽天系
-19. rak_catchcopy: キャッチコピー（60〜120文字、絶対上限127）
-20. rak_desc_text: テキスト説明文（300〜600文字）
-21. rak_desc_html: HTML説明文（h3見出し3〜5個、ulリスト、strong強調）
-22. rak_search_kw: 検索キーワード欄（半角スペース区切り10〜30個）
+  【Amazon 3フィールド生成手順（重複回避）】
+   Step1. amz_title 完成
+   Step2. title の各語をリストアップ → リストA
+   Step3. amz_product_highlights は リストA に無い語のみで構成 → リストB作成
+   Step4. amz_search_keywords は リストA+B のどちらにも無い語のみで構成
+
+# 楽天系（5フィールド）
+20. rak_title: 楽天商品タイトル（60〜127文字、絶対上限127）。SEO主要KWを冒頭に配置。
+21. rak_catchcopy: キャッチコピー（60〜120文字、絶対上限127）
+22. rak_desc_text: テキスト説明文（300〜600文字）
+23. rak_desc_html: HTML説明文
+   ★スマホ保存規約★ 使用可能タグは h3/h4/h5/p/br/ul/ol/li/strong/b/em/i のみ。
+   font/style/script/div/span/h1/h2/img/table等は禁止。インラインstyle属性禁止。色装飾禁止。
+24. rak_attributes: 推奨属性キーワード（カンマ区切り、5〜15個）
+   カラー・サイズ・素材・ブランド・キャラクター（該当あれば）・対象年齢・使用シーン等
+   例: カラー:ホワイト,サイズ:15×21×9cm,素材:PUレザー,ブランド:iikuru,対象年齢:大人,シーン:推し活
 
 推奨パターン本文（{recommended_text[:80]}...）を各説明文の中に適切に織り込むこと。
 """
@@ -1025,6 +1131,106 @@ def _find_title_highlight_duplicates(title: str, highlights_csv: str) -> dict:
         "filtered_csv": ",".join(unique),
     }
 
+def _byte_length(s: str) -> int:
+    """UTF-8バイト数を返す（Amazon検索キーワード欄の500B制限判定用）。"""
+    return len((s or "").encode("utf-8"))
+
+def _split_search_kw(text: str) -> list:
+    """検索キーワード文字列を半角/全角スペース・カンマ・読点で分割。"""
+    if not text:
+        return []
+    parts = re.split(r"[\s\u3000,、]+", text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+def _find_multi_duplicates(title: str, highlights_csv: str, search_kws_text: str) -> dict:
+    """3フィールド間の重複を検出する。
+
+    ルール：
+    - highlights の各KWが title に含まれる → highlights_dup
+    - search_kws の各KWが title か highlights に含まれる → search_dup
+    - 検索キーワード欄は独自KWで構成すべきという Amazon SEO ベストプラクティス
+
+    Returns:
+        highlights側の重複結果と、search側の重複結果を返す。
+    """
+    # ハイライト側の重複
+    h_result = _find_title_highlight_duplicates(title, highlights_csv)
+
+    # 検索キーワード側の重複
+    if not search_kws_text:
+        return {
+            "highlights": h_result,
+            "search": {"duplicated_kws": [], "unique_kws": [], "filtered_text": ""},
+        }
+    title_norm = _normalize_kw(title or "")
+    highlights_kws = [k.strip() for k in (highlights_csv or "").split(",") if k.strip()]
+    highlights_norm_set = {_normalize_kw(k) for k in highlights_kws}
+
+    search_kws = _split_search_kw(search_kws_text)
+    s_dup = []
+    s_uniq = []
+    for kw in search_kws:
+        kw_norm = _normalize_kw(kw)
+        if not kw_norm:
+            continue
+        if (kw_norm in title_norm) or (kw_norm in highlights_norm_set):
+            s_dup.append(kw)
+        else:
+            s_uniq.append(kw)
+    return {
+        "highlights": h_result,
+        "search": {
+            "duplicated_kws": s_dup,
+            "unique_kws": s_uniq,
+            "filtered_text": " ".join(s_uniq),
+        },
+    }
+
+def _find_ip_violations(text: str) -> list:
+    """テキスト内の知的財産権リスクキーワード（有名IP/ブランド/キャラクター）を検出。
+
+    Returns: [検出されたキーワード]
+    完全一致でなく部分一致で検出（"ポケモンfit" も "ポケモン" として検出）。
+    """
+    if not text:
+        return []
+    text_norm = _normalize_kw(text)
+    found = []
+    for kw in IP_RISKY_KEYWORDS:
+        kw_norm = _normalize_kw(kw)
+        if kw_norm and kw_norm in text_norm:
+            found.append(kw)
+    # 重複除去（同じキーワードが複数箇所で見つかる場合）
+    return list(dict.fromkeys(found))
+
+def _check_rakuten_html_compliance(html: str) -> dict:
+    """楽天HTML説明文が使用可能タグ規約に準拠しているかチェック。
+
+    Returns:
+        {
+            "forbidden_tags_found": [検出された禁止タグ],
+            "inline_style_found": bool,  # style="..." 属性
+            "is_compliant": bool,
+        }
+    """
+    if not html:
+        return {"forbidden_tags_found": [], "inline_style_found": False, "is_compliant": True}
+
+    forbidden = []
+    for tag in RAKUTEN_HTML_FORBIDDEN_TAGS:
+        # 開始タグ or 単独タグを検出
+        if re.search(rf"<\s*{tag}(\s|>|/)", html, re.IGNORECASE):
+            forbidden.append(tag)
+
+    # インラインstyle属性
+    inline_style = bool(re.search(r'\sstyle\s*=\s*["\']', html, re.IGNORECASE))
+
+    return {
+        "forbidden_tags_found": forbidden,
+        "inline_style_found": inline_style,
+        "is_compliant": (not forbidden) and (not inline_style),
+    }
+
 def _build_user_prompt(genre: str, tone: str, seo_kw: str,
                        base: str, usp: str, spec: str, review: str) -> str:
     return f"""
@@ -1070,7 +1276,7 @@ def _check_schema_completeness(res: dict) -> list:
             missing.append(f"negative_review_analysis.{k}")
     # amazon_output
     ao = res.get("amazon_output") or {}
-    for k in ["title", "product_highlights", "description", "rufus_qa_pairs"]:
+    for k in ["title", "product_highlights", "description", "rufus_qa_pairs", "search_keywords"]:
         if not ao.get(k):
             missing.append(f"amazon_output.{k}")
     for i in range(1, 6):
@@ -1079,7 +1285,7 @@ def _check_schema_completeness(res: dict) -> list:
             missing.append(f"amazon_output.bullet_{i}")
     # rakuten_output
     ro = res.get("rakuten_output") or {}
-    for k in ["catchcopy", "desc_text", "desc_html", "search_keywords_field"]:
+    for k in ["title", "catchcopy", "desc_text", "desc_html", "attributes"]:
         if not ro.get(k):
             missing.append(f"rakuten_output.{k}")
     return missing
@@ -1095,6 +1301,28 @@ def _g(d, key, default="（未生成）"):
 
 def render_profile_and_reviews(res: dict):
     st.header("🧠 AI分析 ＆ ネガティブレビュー対策")
+
+    # 商品プロファイリング解説パネル（初見担当者向け）
+    with st.expander("❓ 商品プロファイリングの見方（クリックで解説を表示）", expanded=False):
+        st.markdown("""
+**このセクションで表示される4つの項目の意味と使い方**
+
+| 項目 | 意味 | どう使うか |
+|---|---|---|
+| **商品タイプ** | AIが商品を「機能重視/デザイン重視/コスパ重視/総合」の4つに分類した結果 | 訴求ポイントの優先度決めに使用。例：機能重視なら「性能・仕様」を全面に、デザイン重視なら「見た目・世界観」を全面に |
+| **判定理由** | なぜそのタイプと判定したかの根拠 | 判定が妥当か人の目で確認する材料。違和感があれば入力データを見直す |
+| **抽出USP** | 他社と差別化できる独自の強み（Unique Selling Proposition）をAIが整理したもの | 商品説明文の中核メッセージ。全モールの最適化テキストの土台になる |
+| **ターゲット像** | 主要な購入者ペルソナ（年齢・状況・購入動機） | 文章のトーンや使う語彙を決める。例：40代女性ならフォーマル寄り、10代ならカジュアル寄り |
+| **展開SEOキーワード** | 狙いキーワードから派生した関連語・共起語のリスト | 各モールの検索キーワード欄への配分に使用。1つのフィールドに詰め込まず、タイトル/ハイライト/検索KWで役割分担 |
+
+**展開SEOキーワードの有効性の目安**
+- **5〜7個**: 商品ジャンルが狭く、コア検索語が明確な商品向け
+- **8〜10個**: 一般的なEC商品（推奨レンジ）
+- **10個超**: 汎用性が高い商品や、シーン別に訴求先が広い商品向け
+
+主要KWは商品名(title)に、共起語はハイライトと検索キーワード欄に分散配置するのがベストプラクティスです。
+        """)
+
     col1, col2 = st.columns([1, 1.3], gap="medium")
 
     with col1:
@@ -1137,8 +1365,31 @@ def render_amazon_tab(res: dict):
         st.warning("⚠️ Amazon成果物が生成されませんでした。思考予算を上げて再実行してください。")
         return
 
-    # タイトル（75文字ハード上限）
+    # 全体の知的財産権リスクチェック（title + highlights + search_kw + description をまとめて検査）
     title = a.get("title", "")
+    highlights = a.get("product_highlights", "") or ""
+    search_kws_text = a.get("search_keywords", "") or ""
+    description = a.get("description", "") or ""
+    bullets_text = " ".join([
+        (a.get(f"bullet_{i}") or {}).get("body", "") if isinstance(a.get(f"bullet_{i}"), dict) else ""
+        for i in range(1, 6)
+    ])
+    combined_text = f"{title} {highlights} {search_kws_text} {description} {bullets_text}"
+    ip_violations = _find_ip_violations(combined_text)
+    if ip_violations:
+        st.error(
+            f"⚠️ **知的財産権リスクの可能性があるキーワードを検出**：`{'`, `'.join(ip_violations)}`\n\n"
+            "これらは他社の商標・キャラクター・作品名の可能性があり、"
+            "Amazon で違反検知される可能性があります。該当箇所を確認し、"
+            "一般名詞（例: 「キャラクター」「ぬいぐるみ」）に置き換えることを強く推奨します。"
+        )
+
+    # 3フィールド重複検出
+    multi_dup = _find_multi_duplicates(title, highlights, search_kws_text)
+    h_dup_result = multi_dup["highlights"]
+    s_dup_result = multi_dup["search"]
+
+    # タイトル（75文字ハード上限）
     st.markdown("##### 商品名（タイトル）※75文字ハード上限")
     st.markdown(
         _char_badge(title, AMAZON_TITLE_TARGET, hard_max=AMAZON_TITLE_HARD_MAX),
@@ -1155,13 +1406,9 @@ def render_amazon_tab(res: dict):
         "Amazon 2026年アップデートで検索SEOに直接影響。"
         "商品名(title)と重複するキーワードは含めず、両フィールドで検索カバレッジを最大化します。"
     )
-    highlights = a.get("product_highlights", "") or ""
     kw_list = [k.strip() for k in highlights.split(",") if k.strip()]
-
-    # 商品名との重複を検出
-    dup_result = _find_title_highlight_duplicates(title, highlights)
-    duplicated = dup_result["duplicated_kws"]
-    unique = dup_result["unique_kws"]
+    duplicated = h_dup_result["duplicated_kws"]
+    unique = h_dup_result["unique_kws"]
 
     # 個数バッジ（有効KW数を目標比較の対象にする）
     st.markdown(
@@ -1203,7 +1450,7 @@ def render_amazon_tab(res: dict):
     if duplicated:
         st.markdown("**✂️ 重複除去済み版（推奨・そのまま入稿可）**")
         st.text_area("Amazon商品ハイライト_重複除去",
-                     value=dup_result["filtered_csv"], height=80,
+                     value=h_dup_result["filtered_csv"], height=80,
                      key="amz_highlights_filtered", label_visibility="collapsed")
         if len(unique) < AMAZON_HIGHLIGHT_KW_TARGET[0]:
             st.warning(
@@ -1226,10 +1473,9 @@ def render_amazon_tab(res: dict):
                      key=f"amz_b_{i}", label_visibility="collapsed")
 
     # 商品説明
-    desc = a.get("description", "") or ""
     st.markdown("##### 商品説明文")
-    st.markdown(_char_badge(desc, AMAZON_DESC_TARGET), unsafe_allow_html=True)
-    st.text_area("Amazon説明文", value=desc, height=220,
+    st.markdown(_char_badge(description, AMAZON_DESC_TARGET), unsafe_allow_html=True)
+    st.text_area("Amazon説明文", value=description, height=220,
                  key="amz_desc", label_visibility="collapsed")
 
     # Rufus Q&A
@@ -1242,16 +1488,97 @@ def render_amazon_tab(res: dict):
         st.text_area(f"Q&A {i}", value=str(qa), height=70,
                      key=f"amz_qa_{i}", label_visibility="collapsed")
 
+    # 🆕 検索キーワード欄（500バイト上限、title/highlights と重複禁止）
+    st.markdown("##### 🆕 検索キーワード欄（500バイト以内）")
+    st.caption(
+        "Amazon 検索キーワード欄。半角スペース区切りで入稿。"
+        "タイトルとハイライトのどちらにも含まれていないキーワードだけを配置します。"
+    )
+    search_kws_all = _split_search_kw(search_kws_text)
+    s_duplicated = s_dup_result["duplicated_kws"]
+    s_unique = s_dup_result["unique_kws"]
+
+    byte_len = _byte_length(search_kws_text)
+    byte_badge_cls = "badge-ok" if byte_len <= AMAZON_SEARCH_KW_BYTE_LIMIT else "badge-ng"
+    st.markdown(
+        f'<span class="count-badge {byte_badge_cls}">{byte_len} / {AMAZON_SEARCH_KW_BYTE_LIMIT}バイト</span>'
+        + _char_badge_count(s_unique, AMAZON_SEARCH_KW_TARGET)
+        + (f'<span class="count-badge badge-ng">重複{len(s_duplicated)}個</span>' if s_duplicated else ""),
+        unsafe_allow_html=True,
+    )
+
+    if byte_len > AMAZON_SEARCH_KW_BYTE_LIMIT:
+        st.error(f"⚠️ 500バイトを超えています（現在 {byte_len}B）。キーワードを削減してください。")
+    if s_duplicated:
+        st.error(
+            f"⚠️ タイトル or ハイライトと重複するキーワードが {len(s_duplicated)} 個あります "
+            f"（有効な独自キーワードは {len(s_unique)} 個のみ）。"
+            "重複はSEO無効化になるため、下記『重複除去済み』の版を推奨します。"
+        )
+
+    st.markdown("**AIが生成した原文（重複含む）**")
+    st.text_area("Amazon検索キーワード_原文", value=search_kws_text, height=90,
+                 key="amz_search_raw", label_visibility="collapsed")
+
+    if search_kws_all:
+        tags_html = []
+        for kw in search_kws_all:
+            if kw in s_duplicated:
+                tags_html.append(
+                    f'<span class="theme-tag" style="background:#dc2626;">'
+                    f'❌ {kw}<span style="opacity:0.7;font-size:0.7em;"> (重複)</span></span>'
+                )
+            else:
+                tags_html.append(
+                    f'<span class="theme-tag" style="background:#16a34a;">✓ {kw}</span>'
+                )
+        st.markdown(" ".join(tags_html), unsafe_allow_html=True)
+
+    if s_duplicated:
+        st.markdown("**✂️ 重複除去済み版（推奨・そのまま入稿可）**")
+        st.text_area("Amazon検索キーワード_重複除去",
+                     value=s_dup_result["filtered_text"], height=90,
+                     key="amz_search_filtered", label_visibility="collapsed")
+        filtered_byte = _byte_length(s_dup_result["filtered_text"])
+        st.caption(f"重複除去後: {filtered_byte} バイト / {len(s_unique)} 個のキーワード")
+
 def render_rakuten_tab(res: dict):
     r = res.get("rakuten_output") or {}
     st.subheader("📤 楽天市場 最適化テキスト")
-    st.caption("スマホCVR最適化 & 楽天AI検索対策。")
+    st.caption("スマホCVR最適化 & 楽天AI検索対策。HTML説明文はスマホ保存規約に準拠。")
 
     if not r:
         st.warning("⚠️ 楽天成果物が生成されませんでした。思考予算を上げて再実行してください。")
         return
 
+    # 全体の知的財産権リスクチェック
+    title = r.get("title", "") or ""
     catchcopy = r.get("catchcopy", "") or ""
+    desc_text = r.get("desc_text", "") or ""
+    desc_html = r.get("desc_html", "") or ""
+    attributes = r.get("attributes", "") or ""
+    combined_text = f"{title} {catchcopy} {desc_text} {attributes}"
+    ip_violations = _find_ip_violations(combined_text)
+    if ip_violations:
+        st.error(
+            f"⚠️ **知的財産権リスクの可能性があるキーワードを検出**：`{'`, `'.join(ip_violations)}`\n\n"
+            "楽天でも他社商標・キャラクター名は違反リスクがあります。該当箇所を確認し、"
+            "一般名詞に置き換えることを推奨します。"
+        )
+
+    # 🆕 商品タイトル
+    st.markdown("##### 🆕 商品タイトル（60〜127文字）")
+    st.caption("楽天検索SEOで最重要。冒頭にSEO主要KWを配置。127文字を超えると検索結果でも見切れる。")
+    st.markdown(
+        _char_badge(title, RAKUTEN_TITLE_TARGET, hard_max=RAKUTEN_TITLE_HARD_MAX),
+        unsafe_allow_html=True,
+    )
+    st.text_area("楽天タイトル", value=title, height=80,
+                 key="rak_title", label_visibility="collapsed")
+    if len(title) > RAKUTEN_TITLE_HARD_MAX:
+        st.error(f"⚠️ 127文字を超えています（現在 {len(title)} 文字）。手動で削るか再生成してください。")
+
+    # キャッチコピー
     st.markdown("##### キャッチコピー")
     st.markdown(
         _char_badge(catchcopy, RAKUTEN_CATCH_TARGET, hard_max=RAKUTEN_CATCH_HARD_MAX),
@@ -1260,14 +1587,30 @@ def render_rakuten_tab(res: dict):
     st.text_area("楽天キャッチ", value=catchcopy, height=80,
                  key="rak_catch", label_visibility="collapsed")
 
-    desc_text = r.get("desc_text", "") or ""
+    # 商品説明文（テキスト版）
     st.markdown("##### 商品説明文（テキスト版）")
     st.markdown(_char_badge(desc_text, RAKUTEN_TEXT_TARGET), unsafe_allow_html=True)
     st.text_area("楽天テキスト", value=desc_text, height=180,
                  key="rak_text", label_visibility="collapsed")
 
-    desc_html = r.get("desc_html", "") or ""
+    # 商品説明文（HTML版）＋ スマホ規約チェック
     st.markdown("##### 商品説明文（HTML版）")
+    html_check = _check_rakuten_html_compliance(desc_html)
+    if not html_check["is_compliant"]:
+        problems = []
+        if html_check["forbidden_tags_found"]:
+            problems.append(f"禁止タグ: `<{'>`, `<'.join(html_check['forbidden_tags_found'])}>`")
+        if html_check["inline_style_found"]:
+            problems.append("インライン`style=\"...\"`属性")
+        st.error(
+            "⚠️ **楽天スマホ規約違反**：以下の要素が含まれているためスマホでは保存できません。\n\n"
+            + "\n".join([f"- {p}" for p in problems])
+            + f"\n\n使用可能なタグは `{'`, `'.join(RAKUTEN_HTML_ALLOWED_TAGS)}` のみです。"
+            "手動で修正するか、思考予算を上げて再生成してください。"
+        )
+    else:
+        st.success("✅ 楽天スマホ規約に準拠したHTMLです（PC・スマホ両対応）")
+
     st.text_area("楽天HTML", value=desc_html, height=260,
                  key="rak_html", label_visibility="collapsed")
 
@@ -1275,10 +1618,22 @@ def render_rakuten_tab(res: dict):
         with st.expander("👁️ HTMLプレビュー"):
             st.markdown(desc_html, unsafe_allow_html=True)
 
-    kw_field = r.get("search_keywords_field", "") or ""
-    st.markdown("##### 検索キーワード欄（RMS入稿用）")
-    st.text_area("楽天KW欄", value=kw_field, height=80,
-                 key="rak_kw", label_visibility="collapsed")
+    # 🆕 推奨属性キーワード（旧 検索KW欄を置き換え）
+    st.markdown("##### 🆕 推奨属性キーワード")
+    st.caption(
+        "楽天RMS商品登録の推奨項目に対応。"
+        "カラー・サイズ・素材・ブランド・キャラクター・対象年齢・使用シーンなどをカンマ区切りで入力可能な形式。"
+    )
+    attr_list = [k.strip() for k in attributes.split(",") if k.strip()]
+    st.markdown(
+        _char_badge_count(attr_list, RAKUTEN_ATTR_KW_TARGET),
+        unsafe_allow_html=True,
+    )
+    st.text_area("楽天推奨属性", value=attributes, height=100,
+                 key="rak_attr", label_visibility="collapsed")
+    if attr_list:
+        st.markdown(" ".join([f'<span class="theme-tag">{a}</span>' for a in attr_list]),
+                    unsafe_allow_html=True)
 
 # =========================================================================
 # メイン
@@ -1328,6 +1683,16 @@ def main():
 
     # ---- 入力エリア ----
     st.subheader("📥 元情報の入力")
+
+    # 現在の商品名（新規追加）
+    c_current_title = st.text_input(
+        "0. 現在の商品名（任意・強く推奨）",
+        placeholder="例: iikuru ぬいぐるみポーチ 2WAY ショルダーバッグ",
+        help="現在使用中の商品名を入力すると、新しい商品名との整合性が保たれ、"
+             "既存の商品識別との連続性が確保されます。空欄でも問題なく生成できますが、"
+             "既存の商品を最適化する場合は入力を強くおすすめします。",
+    )
+
     col_in1, col_in2 = st.columns(2, gap="medium")
     with col_in1:
         c_base = st.text_area("1. 現在の商品説明・箇条書き（必須）", height=140,
@@ -1376,6 +1741,7 @@ def main():
                     system_instruction=sys_inst,
                     genre=genre, tone=tone, seo_kw=c_seo,
                     base=c_base, usp=c_usp, spec=c_spec, review=c_review,
+                    current_title=c_current_title,
                     temperature=temperature,
                     thinking_budget=thinking_budget,
                     progress_cb=_progress,
