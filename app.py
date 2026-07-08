@@ -435,12 +435,13 @@ def _sanitize_response_dict(d: dict) -> dict:
     return d
 
 def _safe_json_loads(text: str) -> dict:
-    """堅牢なJSON解析。Geminiが生成する制御文字混入・末尾切れなどに対応。
+    """堅牢なJSON解析。Geminiが生成する制御文字混入・末尾切れ・未閉鎖構造などに対応。
 
     段階的に緩めていく：
     1. strict=False で制御文字（生改行等）を許容
     2. 危険な制御文字を除去して再試行
     3. 末尾が切れている場合は最終の '}' までを切り出して再試行
+    4. 未閉鎖の文字列・括弧を自動修復して再試行
     """
     # 1st: strict=False（生改行OK）
     try:
@@ -458,9 +459,75 @@ def _safe_json_loads(text: str) -> dict:
     if last_brace > 0:
         try:
             return json.loads(cleaned[: last_brace + 1], strict=False)
-        except json.JSONDecodeError as e:
-            raise e
+        except json.JSONDecodeError:
+            pass
+    # 4th: 未閉鎖の文字列・括弧を自動修復
+    repaired = _try_json_repair(cleaned)
+    if repaired is not None:
+        return repaired
     raise json.JSONDecodeError("有効なJSON構造が見つかりません", text, 0)
+
+def _try_json_repair(text: str):
+    """末尾切れ・不完全なJSONを修復して解析を試みる。
+
+    AIが応答途中で切断された場合、以下のパターンが発生する：
+    - 文字列値の途中で切断 → 閉じ " が不足
+    - オブジェクトの途中で切断 → 閉じ }, ] が不足
+    - 末尾に不要なカンマ → JSON構文違反
+
+    これらを検出して自動補完する。
+    """
+    if not text or "{" not in text:
+        return None
+
+    # 最初の { から開始
+    start = text.find("{")
+    text = text[start:]
+
+    # 文字列内/構造レベルを追跡しながら括弧を数える
+    in_string = False
+    escape = False
+    stack = []  # 開いた括弧のスタック
+
+    for ch in text:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            expected = "{" if ch == "}" else "["
+            if stack and stack[-1] == expected:
+                stack.pop()
+
+    # 修復開始
+    # (a) 未閉鎖の文字列を閉じる
+    if in_string:
+        # エスケープ途中で切れている場合は末尾の \ を除去
+        text = text.rstrip("\\")
+        text += '"'
+
+    # (b) 末尾の不要カンマ・空白を除去（文字列外で）
+    text = re.sub(r",\s*$", "", text.rstrip())
+
+    # (c) 開いたままの括弧を逆順で閉じる
+    closer = {"{": "}", "[": "]"}
+    for opener in reversed(stack):
+        text += closer[opener]
+
+    try:
+        return json.loads(text, strict=False)
+    except json.JSONDecodeError:
+        return None
 
 def _extract_buried_json(text: str) -> dict:
     """フィールド値内に埋め込まれたJSON（Markdownコードフェンス付き）を救出する。
@@ -597,9 +664,15 @@ def _call_gemini_api(api_key: str, model_name: str, user_prompt: str,
             pos = getattr(e, "pos", 0) or 0
             snippet_start = max(0, pos - 60)
             snippet_end = min(len(last_raw), pos + 60)
-            snippet = last_raw[snippet_start:snippet_end].replace("\n", "\\n")
-            last_err = (f"JSON解析エラー: {e}\n"
-                        f"周辺文字列: ...{snippet}...")
+            head_snippet = last_raw[snippet_start:snippet_end].replace("\n", "\\n")
+            # 応答の末尾も表示（切断されているかを診断するため）
+            tail_snippet = last_raw[-200:].replace("\n", "\\n") if len(last_raw) > 200 else ""
+            last_err = (
+                f"JSON解析エラー: {e}\n"
+                f"周辺文字列: ...{head_snippet}...\n"
+                f"応答末尾200文字: ...{tail_snippet}\n"
+                f"応答全長: {len(last_raw)}文字, finish_reason: {last_finish_reason}"
+            )
         except Exception as e:
             last_err = f"{type(e).__name__}: {e}"
         if attempt < max_retries:
