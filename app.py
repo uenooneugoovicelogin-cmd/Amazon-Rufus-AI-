@@ -2406,39 +2406,83 @@ def main():
         if "fetched_competitor_info" in st.session_state:
             del st.session_state["fetched_competitor_info"]
 
-    # ヘッダ行にクリアボタン
+    def _clear_single_input(key):
+        """個別項目のクリアコールバック"""
+        st.session_state[key] = ""
+
+    def _input_with_clear(label, key, area=True, height=110, placeholder="", help=None):
+        """ラベル + 右横クリアボタン + 入力ウィジェット をコンパクトに配置するヘルパー。
+
+        Streamlit の on_click コールバックを使い、指定 key の session_state を空にする。
+        area=True: text_area / area=False: text_input を使い分ける。
+        """
+        header_cols = st.columns([6, 1])
+        with header_cols[0]:
+            st.markdown(f"**{label}**")
+        with header_cols[1]:
+            st.button(
+                "🗑 クリア",
+                key=f"btn_clr_{key}",
+                on_click=_clear_single_input,
+                args=(key,),
+                use_container_width=True,
+                help="この項目のみクリア",
+            )
+        if area:
+            return st.text_area(
+                label, key=key, height=height, placeholder=placeholder,
+                help=help, label_visibility="collapsed",
+            )
+        else:
+            return st.text_input(
+                label, key=key, placeholder=placeholder,
+                help=help, label_visibility="collapsed",
+            )
+
+    # ヘッダ行に「すべてクリア」ボタン
     col_hdr1, col_hdr2 = st.columns([4, 1])
     with col_hdr2:
         st.button("🗑 入力をすべてクリア", on_click=_clear_all_inputs, use_container_width=True)
 
-    # 現在の商品名（新規追加）
-    c_current_title = st.text_input(
+    # 現在の商品名
+    c_current_title = _input_with_clear(
         "0. 現在の商品名（任意・強く推奨）",
+        "input_current_title",
+        area=False,
         placeholder="例: iikuru ぬいぐるみポーチ 2WAY ショルダーバッグ",
         help="現在使用中の商品名を入力すると、新しい商品名との整合性が保たれ、"
              "既存の商品識別との連続性が確保されます。空欄でも問題なく生成できますが、"
              "既存の商品を最適化する場合は入力を強くおすすめします。",
-        key="input_current_title",
     )
 
     col_in1, col_in2 = st.columns(2, gap="medium")
     with col_in1:
-        c_base = st.text_area("1. 現在の商品説明・箇条書き（必須）", height=140,
-                              placeholder="既存の商品ページ文章を貼り付けてください。",
-                              key="input_base")
-        c_usp = st.text_area("2. 自社独自の強み・こだわり・専門情報（任意）", height=110,
-                             placeholder="工場直接仕入れ、独自の検品体制、素材規格など。空欄ならAIが自動抽出します。",
-                             key="input_usp")
+        c_base = _input_with_clear(
+            "1. 現在の商品説明・箇条書き（必須）", "input_base",
+            height=140,
+            placeholder="既存の商品ページ文章を貼り付けてください。",
+        )
+        c_usp = _input_with_clear(
+            "2. 自社独自の強み・こだわり・専門情報（任意）", "input_usp",
+            height=110,
+            placeholder="工場直接仕入れ、独自の検品体制、素材規格など。空欄ならAIが自動抽出します。",
+        )
     with col_in2:
-        c_spec = st.text_area("3. 補足スペック・仕様・サイズ等（必須）", height=140,
-                              placeholder="サイズ、重量、素材、耐荷重、付属品などの正確な数値（Rufus対策に直結）。",
-                              key="input_spec")
-        c_review = st.text_area("4. カスタマーレビュー・顧客の悩み（必須）", height=110,
-                                placeholder="ネガティブなレビューや、購入者が迷いやすいポイントを貼り付けてください。",
-                                key="input_review")
-        c_seo = st.text_input("5. 狙いたいSEOキーワード（任意）",
-                              placeholder="例：介護用クッション, 洗える, 通気性",
-                              key="input_seo")
+        c_spec = _input_with_clear(
+            "3. 補足スペック・仕様・サイズ等（必須）", "input_spec",
+            height=140,
+            placeholder="サイズ、重量、素材、耐荷重、付属品などの正確な数値（Rufus対策に直結）。",
+        )
+        c_review = _input_with_clear(
+            "4. カスタマーレビュー・顧客の悩み（必須）", "input_review",
+            height=110,
+            placeholder="ネガティブなレビューや、購入者が迷いやすいポイントを貼り付けてください。",
+        )
+        c_seo = _input_with_clear(
+            "5. 狙いたいSEOキーワード（任意）", "input_seo",
+            area=False,
+            placeholder="例：介護用クッション, 洗える, 通気性",
+        )
 
     # ---- 競合商品比較セクション ----
     with st.expander("🔍 6. 競合商品との比較（任意・独自USPの深掘りに使用）", expanded=False):
@@ -2450,22 +2494,35 @@ def main():
         col_own, col_comp = st.columns(2, gap="medium")
         with col_own:
             st.markdown("**🏢 自社商品**")
-            c_own_url = st.text_input("自社商品のURL", placeholder="https://...",
-                                      key="input_own_url")
-            c_own_paste = st.text_area("または直接ペースト（自社商品情報）", height=120,
-                                        placeholder="商品ページのタイトル・説明・スペック等を貼り付け",
-                                        key="input_own_paste")
+            c_own_url = _input_with_clear(
+                "自社商品のURL", "input_own_url",
+                area=False,
+                placeholder="https://...",
+            )
+            c_own_paste = _input_with_clear(
+                "または直接ペースト（自社商品情報）", "input_own_paste",
+                height=120,
+                placeholder="商品ページのタイトル・説明・スペック等を貼り付け",
+            )
         with col_comp:
             st.markdown("**🎯 競合商品（最大3件）**")
-            c_comp_url_1 = st.text_input("競合商品URL 1", placeholder="https://...",
-                                          key="input_comp_url_1")
-            c_comp_url_2 = st.text_input("競合商品URL 2", placeholder="https://...",
-                                          key="input_comp_url_2")
-            c_comp_url_3 = st.text_input("競合商品URL 3", placeholder="https://...",
-                                          key="input_comp_url_3")
-            c_comp_paste = st.text_area("または直接ペースト（競合商品情報）", height=120,
-                                         placeholder="複数競合を1つのテキストにまとめて貼り付け可能",
-                                         key="input_comp_paste")
+            c_comp_url_1 = _input_with_clear(
+                "競合商品URL 1", "input_comp_url_1",
+                area=False, placeholder="https://...",
+            )
+            c_comp_url_2 = _input_with_clear(
+                "競合商品URL 2", "input_comp_url_2",
+                area=False, placeholder="https://...",
+            )
+            c_comp_url_3 = _input_with_clear(
+                "競合商品URL 3", "input_comp_url_3",
+                area=False, placeholder="https://...",
+            )
+            c_comp_paste = _input_with_clear(
+                "または直接ペースト（競合商品情報）", "input_comp_paste",
+                height=120,
+                placeholder="複数競合を1つのテキストにまとめて貼り付け可能",
+            )
 
         # URL取得ボタン
         fetch_col1, fetch_col2 = st.columns([1, 3])
