@@ -309,6 +309,13 @@ class ContentSchemaFlat(BaseModel):
     rak_desc_text: str = Field(description="楽天テキスト説明300〜600文字")
     rak_desc_html: str = Field(description="楽天HTML説明。使用可能タグは h3/h4/h5/p/br/ul/ol/li/strong/b/em/i のみ。font/style/script/iframe/div/span/h1/h2/img/table/インラインstyle属性は絶対禁止（スマホで保存不可）。色装飾は使わず見出しとstrong強調のみで視覚設計する。")
     rak_attributes: str = Field(description="楽天推奨属性キーワード。カンマ区切りで、以下のカテゴリを含める：カラー・サイズ・素材・ブランド・キャラクター(該当あれば)・対象年齢・使用シーン。例: カラー:ホワイト,サイズ:15×21×9cm,素材:PUレザー,ブランド:iikuru,対象:大人女性,シーン:推し活")
+    rak_color_palette: str = Field(description="""楽天RMSエディタで色装飾を手動適用する際の推奨カラーパレット提案。以下の固定フォーマットで返す（改行区切り）:
+メインカラー: #XXXXXX | 用途と理由
+サブカラー: #XXXXXX | 用途と理由
+アクセントカラー: #XXXXXX | 用途と理由
+背景色: #XXXXXX | 用途と理由
+配色戦略: 商品ジャンル・ターゲット・購買心理を踏まえた戦略説明
+※HTML本体には色は含めず、あくまで参考情報として提示。""")
 
 def _unflatten_analysis(flat: dict) -> dict:
     """フラットな分析結果を元のネスト構造に組み直す。"""
@@ -355,6 +362,7 @@ def _unflatten_content(flat: dict) -> dict:
         "desc_text": flat.get("rak_desc_text", ""),
         "desc_html": flat.get("rak_desc_html", ""),
         "attributes": flat.get("rak_attributes", ""),
+        "color_palette": flat.get("rak_color_palette", ""),
     }
     return {"amazon_output": amazon, "rakuten_output": rakuten}
 
@@ -483,6 +491,43 @@ def build_system_instruction(tone_rule: str) -> str:
   <li>丁寧な縫製で長く使える耐久性</li>
   </ul>
 - rak_desc_html はPCとスマホの両方で問題なく表示・保存できるHTMLである必要がある。
+
+# 【楽天商品タイトル(rak_title)の【】配置ルール】
+- 【】(隅付きカッコ) の使用は視認性を大きく上げるため、SEOだけでなくCVR向上にも重要。
+- 配置ルール（厳守）:
+  ・「訴求性の高い要素」（送料無料、ランキング入賞、期間限定、○○対応、大人気 等）は
+    **必ずタイトル先頭に**【】で配置。ユーザーの目を最初に引く役割。
+  ・「補足属性」（サイズ、カラー、素材、対象年齢、キャラクター名 等）は
+    **タイトル末尾に**【】で配置。詳細情報として補完する役割。
+  ・【】は1タイトルあたり最大2箇所まで（先頭1つ、末尾1つ）。3つ以上は視認性を損なう。
+  ・訴求性の高い要素が無い場合は先頭の【】は省略してよい。
+- 良い例: 【送料無料】厚手PUレザー ぬいポーチ 2WAY 大人向け【15cmサイズ対応】
+- 悪い例（不要な多用）: 【新作】【送料無料】ぬいポーチ【PUレザー】【15cm】【推し活】
+
+# 【楽天カラーパレット(rak_color_palette)の提案ルール】
+- rak_desc_html には色装飾を含めない（スマホ規約準拠のため）。
+- しかし楽天RMSエディタでは店舗運営者が手動で色装飾を追加できるため、
+  rak_color_palette フィールドで推奨配色を提案する。
+- ジャンル別の推奨配色戦略:
+  ・推し活・ホビー: ビビッドな色（ピンク #FF6B9D、パープル #9C27B0、イエロー #FFC107）
+    → 感情を喚起、SNS映え、購買意欲刺激
+  ・介護・看護: 落ち着いた色（ソフトブルー #4A90E2、ミントグリーン #7FBDA5、ベージュ #F5E6D3）
+    → 信頼感、安心感、清潔感
+  ・ベビー: パステルカラー（薄ピンク #FFD1DC、ベビーブルー #B0E0E6、クリーム #FFF8DC）
+    → 優しさ、安全性、可愛らしさ
+  ・スポーツ: 力強い色（レッド #D32F2F、ブラック #212121、ネオングリーン #00E676）
+    → エネルギー、勝負感、モチベーション
+  ・ペット: 温かい色（オレンジ #FF9800、ブラウン #6D4C41、クリーム #FFECB3）
+    → 愛らしさ、親しみ、家庭的
+  ・園芸: 自然色（グリーン #4CAF50、アーステラコッタ #A0522D、スカイブルー #87CEEB）
+    → 自然、成長、癒し
+  ・季節行事（ハロウィン等）: 季節色（オレンジ #FF6F00、パープル #6A1B9A、ブラック #212121）
+    → 期間限定感、テーマ性
+  ・一般雑貨: 中立で信頼できる色（ネイビー #1565C0、グレー #616161、白 #FAFAFA）
+    → 汎用性、上品さ、読みやすさ
+- 常に4色（メイン・サブ・アクセント・背景）とその戦略を明示。ジャンル + ターゲット層に合わせて調整。
+- ターゲットが「読みやすさ重視」の場合は、背景の白ベースにダーク系メインカラー。
+- ターゲットが「購買欲刺激重視」の場合は、暖色系（赤・オレンジ・ピンク）を活用。
 
 # 【★最重要 知的財産権リスク回避】
 - 商品名・キャッチコピー・説明文・キーワード欄・箇条書き・Q&A・その他すべてのフィールドで、
@@ -1066,6 +1111,7 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
                             genre: str, tone: str, seo_kw: str,
                             base: str, usp: str, spec: str, review: str,
                             current_title: str = "",
+                            competitor_info: str = "",
                             temperature: float = 0.5,
                             thinking_budget: int = 2048,
                             use_stage0: bool = True,
@@ -1077,6 +1123,7 @@ def _call_gemini_two_stage(api_key: str, model_name: str,
     パース後に元のネスト構造へ組み直して返す。
 
     current_title: 現在の商品名（あれば）。整合性維持のためStage 1/2の文脈に渡す。
+    competitor_info: 自社商品と競合商品の情報（あれば）。extracted_uspの深掘りに使用。
     use_stage0: レビューが長い場合にStage 0（Flash モデルでの要約）を実行するか
     """
     # ---- Stage 0: レビューが長い場合の消化（Flash モデルで安価に処理） ----
@@ -1146,6 +1193,19 @@ Markdownコードフェンス禁止・ネスト構造禁止・メタコメント
         stage_prefix = "Stage 2a/3" if review_digest_dict else "Stage 1a/2"
         progress_cb(f"{stage_prefix}: 商品プロファイル生成中（5フィールド）...")
 
+    # 競合商品情報セクション（提供された場合のみ）
+    competitor_section = ""
+    if competitor_info and competitor_info.strip():
+        competitor_section = f"""
+
+【競合商品との比較情報（USPの深掘りに使用）】
+{competitor_info}
+
+【追加指示（競合情報がある場合）】
+extracted_usp フィールドには、上記の競合商品と比較して**自社商品にしかない独自の強み**を反映してください。
+競合が持っていない差別化ポイントを最優先で抽出し、「他社との違い」を明確に示すこと。
+"""
+
     stage1a_prompt = f"""【商品情報】
 - ジャンル: {genre}
 - 文章トーン: {tone}
@@ -1157,7 +1217,7 @@ Markdownコードフェンス禁止・ネスト構造禁止・メタコメント
 - 自社USP: {usp if usp else "（未入力：既存文から抽出）"}
 - スペック: {spec}
 - レビュー: {review}
-
+{competitor_section}
 【指示】
 以下5フィールドのフラットJSONを返してください。全て必須。空文字禁止。装飾なし。
 
@@ -1361,6 +1421,15 @@ Markdownコードフェンス禁止・ネスト構造禁止・メタコメント
 24. rak_attributes: 推奨属性キーワード（カンマ区切り、5〜15個）
    カラー・サイズ・素材・ブランド・キャラクター（該当あれば）・対象年齢・使用シーン等
    例: カラー:ホワイト,サイズ:15×21×9cm,素材:PUレザー,ブランド:iikuru,対象年齢:大人,シーン:推し活
+25. rak_color_palette: 楽天RMSエディタでの手動色装飾用の推奨カラーパレット
+   ジャンル「{genre}」とターゲット層に合わせて、メイン/サブ/アクセント/背景の4色を提案。
+   固定フォーマット:
+     メインカラー: #XXXXXX | 用途と理由
+     サブカラー: #XXXXXX | 用途と理由
+     アクセントカラー: #XXXXXX | 用途と理由
+     背景色: #XXXXXX | 用途と理由
+     配色戦略: 商品ジャンル・購買心理を踏まえた戦略説明
+   rak_desc_html本体には色は含めない。この提案は参考情報として提示するだけ。
 
 推奨パターン本文（{recommended_text[:80]}...）を各説明文の中に適切に織り込むこと。
 """
@@ -1650,6 +1719,7 @@ def _generate_full_csv(res: dict) -> str:
     row["楽天_商品説明文_テキスト版"] = r.get("desc_text", "") or ""
     row["楽天_商品説明文_HTML版"] = r.get("desc_html", "") or ""
     row["楽天_推奨属性キーワード"] = r.get("attributes", "") or ""
+    row["楽天_推奨カラーパレット"] = r.get("color_palette", "") or ""
 
     return _csv_from_rows([row], list(row.keys()))
 
@@ -1692,6 +1762,7 @@ def _generate_rakuten_csv(res: dict) -> str:
         {"項目": "商品説明文(テキスト版)", "内容": r.get("desc_text", "") or ""},
         {"項目": "商品説明文(HTML版)", "内容": r.get("desc_html", "") or ""},
         {"項目": "推奨属性キーワード", "内容": r.get("attributes", "") or ""},
+        {"項目": "推奨カラーパレット", "内容": r.get("color_palette", "") or ""},
     ]
     return _csv_from_rows(rows, ["項目", "内容"])
 
@@ -1714,6 +1785,97 @@ def _generate_analysis_csv(res: dict) -> str:
         {"項目": "推奨理由", "内容": n.get("ai_recommendation", "") or ""},
     ]
     return _csv_from_rows(rows, ["項目", "内容"])
+
+# =========================================================================
+# 競合商品情報取得関数（URLからの抽出 / ペースト対応）
+# =========================================================================
+def _fetch_product_from_url(url: str, timeout: int = 10) -> dict:
+    """商品URLからHTMLを取得して主要情報を抽出する（ベストエフォート）。
+
+    Amazon・楽天のような大手ECサイトはボット対策が厳しいため、取得失敗するケースも多い。
+    失敗時は {"error": "..."} を返す。取得成功時は辞書で以下を返す:
+    - title: タイトル
+    - description: メタ説明
+    - h1: h1見出し
+    - main_text: 本文抜粋（最大3000文字）
+    """
+    if not url or not url.strip():
+        return None
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return {"error": "requests/beautifulsoup4 ライブラリが未インストールです（pip install requests beautifulsoup4）"}
+
+    try:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        r = requests.get(url.strip(), headers=headers, timeout=timeout, allow_redirects=True)
+        if r.status_code != 200:
+            return {"error": f"HTTPステータス {r.status_code}（アクセス拒否またはページ移動の可能性）"}
+
+        # 文字エンコーディング推定
+        if r.encoding == "ISO-8859-1":
+            r.encoding = r.apparent_encoding
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # 不要要素の除去
+        for tag in soup(["script", "style", "nav", "footer", "header", "iframe"]):
+            tag.decompose()
+
+        title_tag = soup.find("title")
+        title = title_tag.get_text(strip=True) if title_tag else ""
+
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        description = meta_desc.get("content", "").strip() if meta_desc else ""
+        if not description:
+            og_desc = soup.find("meta", attrs={"property": "og:description"})
+            description = og_desc.get("content", "").strip() if og_desc else ""
+
+        h1_tag = soup.find("h1")
+        h1 = h1_tag.get_text(strip=True) if h1_tag else ""
+
+        # 本文抽出（過度に長くしない）
+        main_text = soup.get_text(separator="\n", strip=True)
+        main_text = re.sub(r"\n{3,}", "\n\n", main_text)
+        main_text = main_text[:3000]
+
+        return {
+            "url": url,
+            "title": title,
+            "description": description,
+            "h1": h1,
+            "main_text": main_text,
+        }
+    except Exception as e:
+        return {"error": f"取得エラー: {type(e).__name__}: {str(e)[:100]}"}
+
+def _format_competitor_info(own: dict, competitors: list) -> str:
+    """自社商品情報と競合商品情報群を、AI に渡すためのテキストに整形。"""
+    parts = []
+    if own and own.get("main_text"):
+        parts.append(f"""■ 自社商品情報
+タイトル: {own.get('title', '')}
+説明: {own.get('description', '')}
+見出し: {own.get('h1', '')}
+本文抜粋: {own.get('main_text', '')[:1500]}
+""")
+    for i, c in enumerate(competitors, 1):
+        if c and c.get("main_text"):
+            parts.append(f"""■ 競合商品 {i}
+タイトル: {c.get('title', '')}
+説明: {c.get('description', '')}
+見出し: {c.get('h1', '')}
+本文抜粋: {c.get('main_text', '')[:1500]}
+""")
+    return "\n".join(parts) if parts else ""
 
 def _build_user_prompt(genre: str, tone: str, seo_kw: str,
                        base: str, usp: str, spec: str, review: str) -> str:
@@ -1769,7 +1931,7 @@ def _check_schema_completeness(res: dict) -> list:
             missing.append(f"amazon_output.bullet_{i}")
     # rakuten_output
     ro = res.get("rakuten_output") or {}
-    for k in ["title", "catchcopy", "desc_text", "desc_html", "attributes"]:
+    for k in ["title", "catchcopy", "desc_text", "desc_html", "attributes", "color_palette"]:
         if not ro.get(k):
             missing.append(f"rakuten_output.{k}")
     return missing
@@ -2143,6 +2305,33 @@ def render_rakuten_tab(res: dict):
         st.markdown(" ".join([f'<span class="theme-tag">{a}</span>' for a in attr_list]),
                     unsafe_allow_html=True)
 
+    # 🆕 推奨カラーパレット
+    color_palette = r.get("color_palette", "") or ""
+    if color_palette:
+        st.markdown("##### 🎨 推奨カラーパレット（楽天RMSエディタで手動適用する際の参考）")
+        st.caption(
+            "商品ジャンルとターゲット層に応じた推奨配色。"
+            "rak_desc_html には色装飾を含めていません（スマホ規約準拠のため）が、"
+            "楽天RMSエディタで手動で色を追加する際にこの配色を参考にしてください。"
+        )
+        # カラーパレット文字列から色コードを抽出して視覚表示
+        color_matches = re.findall(r'([#][0-9A-Fa-f]{6})', color_palette)
+        if color_matches:
+            # カラースウォッチを表示
+            swatch_cols = st.columns(min(len(color_matches), 5))
+            for i, color_code in enumerate(color_matches[:5]):
+                with swatch_cols[i]:
+                    st.markdown(
+                        f'<div style="background-color:{color_code};height:60px;border-radius:6px;'
+                        f'border:1px solid #ccc;display:flex;align-items:center;justify-content:center;">'
+                        f'<span style="color:#fff;text-shadow:0 0 3px #000;font-weight:bold;font-size:0.8rem;">'
+                        f'{color_code}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+        # 説明文を表示
+        st.text_area("カラーパレット詳細（コピー可）", value=color_palette, height=180,
+                     key="rak_color_palette", label_visibility="collapsed")
+
 # =========================================================================
 # メイン
 # =========================================================================
@@ -2202,6 +2391,26 @@ def main():
     # ---- 入力エリア ----
     st.subheader("📥 元情報の入力")
 
+    # 入力クリアコールバック
+    _input_keys = [
+        "input_current_title", "input_base", "input_usp", "input_spec",
+        "input_review", "input_seo",
+        "input_own_url", "input_comp_url_1", "input_comp_url_2", "input_comp_url_3",
+        "input_own_paste", "input_comp_paste",
+    ]
+    def _clear_all_inputs():
+        for k in _input_keys:
+            if k in st.session_state:
+                st.session_state[k] = ""
+        # 競合取得キャッシュもクリア
+        if "fetched_competitor_info" in st.session_state:
+            del st.session_state["fetched_competitor_info"]
+
+    # ヘッダ行にクリアボタン
+    col_hdr1, col_hdr2 = st.columns([4, 1])
+    with col_hdr2:
+        st.button("🗑 入力をすべてクリア", on_click=_clear_all_inputs, use_container_width=True)
+
     # 現在の商品名（新規追加）
     c_current_title = st.text_input(
         "0. 現在の商品名（任意・強く推奨）",
@@ -2209,21 +2418,98 @@ def main():
         help="現在使用中の商品名を入力すると、新しい商品名との整合性が保たれ、"
              "既存の商品識別との連続性が確保されます。空欄でも問題なく生成できますが、"
              "既存の商品を最適化する場合は入力を強くおすすめします。",
+        key="input_current_title",
     )
 
     col_in1, col_in2 = st.columns(2, gap="medium")
     with col_in1:
         c_base = st.text_area("1. 現在の商品説明・箇条書き（必須）", height=140,
-                              placeholder="既存の商品ページ文章を貼り付けてください。")
+                              placeholder="既存の商品ページ文章を貼り付けてください。",
+                              key="input_base")
         c_usp = st.text_area("2. 自社独自の強み・こだわり・専門情報（任意）", height=110,
-                             placeholder="工場直接仕入れ、独自の検品体制、素材規格など。空欄ならAIが自動抽出します。")
+                             placeholder="工場直接仕入れ、独自の検品体制、素材規格など。空欄ならAIが自動抽出します。",
+                             key="input_usp")
     with col_in2:
         c_spec = st.text_area("3. 補足スペック・仕様・サイズ等（必須）", height=140,
-                              placeholder="サイズ、重量、素材、耐荷重、付属品などの正確な数値（Rufus対策に直結）。")
+                              placeholder="サイズ、重量、素材、耐荷重、付属品などの正確な数値（Rufus対策に直結）。",
+                              key="input_spec")
         c_review = st.text_area("4. カスタマーレビュー・顧客の悩み（必須）", height=110,
-                                placeholder="ネガティブなレビューや、購入者が迷いやすいポイントを貼り付けてください。")
+                                placeholder="ネガティブなレビューや、購入者が迷いやすいポイントを貼り付けてください。",
+                                key="input_review")
         c_seo = st.text_input("5. 狙いたいSEOキーワード（任意）",
-                              placeholder="例：介護用クッション, 洗える, 通気性")
+                              placeholder="例：介護用クッション, 洗える, 通気性",
+                              key="input_seo")
+
+    # ---- 競合商品比較セクション ----
+    with st.expander("🔍 6. 競合商品との比較（任意・独自USPの深掘りに使用）", expanded=False):
+        st.caption(
+            "自社商品と競合商品のURLを入力するか、直接ペーストしてください。"
+            "AIがそれらを比較して、自社商品にしかない独自の強みを 抽出USP に反映します。"
+            "URL取得は大手ECサイトのボット対策で失敗することがあるため、失敗時は直接ペーストしてください。"
+        )
+        col_own, col_comp = st.columns(2, gap="medium")
+        with col_own:
+            st.markdown("**🏢 自社商品**")
+            c_own_url = st.text_input("自社商品のURL", placeholder="https://...",
+                                      key="input_own_url")
+            c_own_paste = st.text_area("または直接ペースト（自社商品情報）", height=120,
+                                        placeholder="商品ページのタイトル・説明・スペック等を貼り付け",
+                                        key="input_own_paste")
+        with col_comp:
+            st.markdown("**🎯 競合商品（最大3件）**")
+            c_comp_url_1 = st.text_input("競合商品URL 1", placeholder="https://...",
+                                          key="input_comp_url_1")
+            c_comp_url_2 = st.text_input("競合商品URL 2", placeholder="https://...",
+                                          key="input_comp_url_2")
+            c_comp_url_3 = st.text_input("競合商品URL 3", placeholder="https://...",
+                                          key="input_comp_url_3")
+            c_comp_paste = st.text_area("または直接ペースト（競合商品情報）", height=120,
+                                         placeholder="複数競合を1つのテキストにまとめて貼り付け可能",
+                                         key="input_comp_paste")
+
+        # URL取得ボタン
+        fetch_col1, fetch_col2 = st.columns([1, 3])
+        with fetch_col1:
+            if st.button("🔎 URLから情報取得", use_container_width=True):
+                with st.spinner("URLから商品情報を取得中..."):
+                    own_info = _fetch_product_from_url(c_own_url) if c_own_url else None
+                    comp_infos = []
+                    for u in [c_comp_url_1, c_comp_url_2, c_comp_url_3]:
+                        if u and u.strip():
+                            comp_infos.append(_fetch_product_from_url(u))
+                    st.session_state["fetched_competitor_info"] = {
+                        "own": own_info,
+                        "competitors": comp_infos,
+                    }
+        with fetch_col2:
+            if "fetched_competitor_info" in st.session_state:
+                fci = st.session_state["fetched_competitor_info"]
+                own_ok = fci.get("own") and "error" not in fci["own"]
+                comp_ok_count = sum(1 for c in fci.get("competitors", [])
+                                    if c and "error" not in c)
+                if own_ok or comp_ok_count > 0:
+                    st.success(f"取得成功: 自社{'✓' if own_ok else '✗'} / 競合{comp_ok_count}件")
+                # エラー情報も表示
+                if fci.get("own") and "error" in fci["own"]:
+                    st.warning(f"自社URL: {fci['own']['error']}")
+                for i, c in enumerate(fci.get("competitors", []), 1):
+                    if c and "error" in c:
+                        st.warning(f"競合URL{i}: {c['error']}")
+
+        # 取得結果のプレビュー
+        if "fetched_competitor_info" in st.session_state:
+            fci = st.session_state["fetched_competitor_info"]
+            with st.expander("📄 URL取得結果プレビュー"):
+                own = fci.get("own")
+                if own and "error" not in own:
+                    st.markdown("**自社商品:**")
+                    st.text(f"タイトル: {own.get('title', '')[:200]}")
+                    st.text(f"説明: {own.get('description', '')[:300]}")
+                for i, c in enumerate(fci.get("competitors", []), 1):
+                    if c and "error" not in c:
+                        st.markdown(f"**競合{i}:**")
+                        st.text(f"タイトル: {c.get('title', '')[:200]}")
+                        st.text(f"説明: {c.get('description', '')[:300]}")
 
     st.markdown("---")
 
@@ -2252,6 +2538,25 @@ def main():
                 def _progress(msg):
                     status_placeholder.info(f"🔄 {msg}")
 
+                # 競合情報を組み立て（URL取得済み + ペースト の両方を統合）
+                competitor_info = ""
+                fci = st.session_state.get("fetched_competitor_info")
+                if fci:
+                    own = fci.get("own")
+                    comps = [c for c in fci.get("competitors", []) if c and "error" not in c]
+                    own_ok = own and "error" not in own
+                    competitor_info = _format_competitor_info(
+                        own if own_ok else None, comps
+                    )
+                # ペースト内容も追加
+                if c_own_paste or c_comp_paste:
+                    paste_section = ""
+                    if c_own_paste:
+                        paste_section += f"\n■ 自社商品情報（手動ペースト）\n{c_own_paste}\n"
+                    if c_comp_paste:
+                        paste_section += f"\n■ 競合商品情報（手動ペースト）\n{c_comp_paste}\n"
+                    competitor_info = (competitor_info + "\n" + paste_section).strip()
+
                 _progress("初期化中...")
                 res = _call_gemini_two_stage(
                     api_key=api_key,
@@ -2260,6 +2565,7 @@ def main():
                     genre=genre, tone=tone, seo_kw=c_seo,
                     base=c_base, usp=c_usp, spec=c_spec, review=c_review,
                     current_title=c_current_title,
+                    competitor_info=competitor_info,
                     temperature=temperature,
                     thinking_budget=thinking_budget,
                     use_stage0=use_stage0,
